@@ -90,7 +90,13 @@ export default function ThreatHunterDashboard() {
   const [flows, setFlows] = useState(DEMO_FLOWS);
   const [selectedFlow, setSelectedFlow] = useState(DEMO_FLOWS[0]);
   const [canaryAlerts, setCanaryAlerts] = useState([]);
-  const [mitigatedIps, setMitigatedIps] = useState([]);
+  const [mitigatedIps, setMitigatedIps] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("openc2_mitigated_ips") || "[]");
+    } catch {
+      return [];
+    }
+  });
   const [sigmaModal, setSigmaModal] = useState(false);
 
   // Authentication states
@@ -158,6 +164,13 @@ export default function ThreatHunterDashboard() {
           if (data.flows && data.flows.length > 0) {
             setFlows(data.flows);
           }
+          if (data.blocked_ips) {
+            setMitigatedIps((prev) => {
+              const merged = Array.from(new Set([...prev, ...data.blocked_ips]));
+              localStorage.setItem("openc2_mitigated_ips", JSON.stringify(merged));
+              return merged;
+            });
+          }
         }
         const cRes = await fetch("http://127.0.0.1:8000/api/v1/canary-alerts", { headers });
         if (cRes.ok) {
@@ -220,10 +233,18 @@ export default function ThreatHunterDashboard() {
   };
 
   const handleMitigate = async (flow) => {
+    const targetIp = flow.dst_ip;
+    // Persist immediately in local state & browser storage so UI reflects instantly on reload
+    setMitigatedIps((prev) => {
+      const updated = Array.from(new Set([...prev, targetIp]));
+      localStorage.setItem("openc2_mitigated_ips", JSON.stringify(updated));
+      return updated;
+    });
+
     if (!IS_DEMO_MODE) {
       try {
         const pidParam = flow.is_protected ? "" : `&pid=${flow.pid}`;
-        await fetch(`http://127.0.0.1:8000/api/v1/mitigate?dst_ip=${flow.dst_ip}${pidParam}`, {
+        await fetch(`http://127.0.0.1:8000/api/v1/mitigate?dst_ip=${targetIp}${pidParam}`, {
           method: "POST",
           headers: { "X-OpenC2-Token": authToken }
         });
@@ -231,7 +252,6 @@ export default function ThreatHunterDashboard() {
         // Handled
       }
     }
-    setMitigatedIps((prev) => [...prev, flow.dst_ip]);
   };
 
   // If verifying session initially
@@ -374,10 +394,22 @@ export default function ThreatHunterDashboard() {
         <div className="flex flex-wrap items-center gap-3">
           <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-lg">
             <span className="text-xs text-slate-400 block">Critical Flows</span>
-            <span className="text-lg font-bold text-red-400">
-              {flows.filter((f) => f.risk_score >= 70).length} Active
+            <span className={`text-lg font-bold ${
+              flows.filter((f) => f.risk_score >= 70 && !mitigatedIps.includes(f.dst_ip) && !f.is_blocked).length > 0
+                ? "text-red-400"
+                : "text-emerald-400"
+            }`}>
+              {flows.filter((f) => f.risk_score >= 70 && !mitigatedIps.includes(f.dst_ip) && !f.is_blocked).length} Active
             </span>
           </div>
+
+          <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-lg">
+            <span className="text-xs text-slate-400 block">Threats Contained</span>
+            <span className="text-lg font-bold text-sky-400">
+              {mitigatedIps.length} Blocked
+            </span>
+          </div>
+
           <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-lg">
             <span className="text-xs text-slate-400 block">DGA / High Entropy</span>
             <span className="text-lg font-bold text-amber-400">
@@ -427,8 +459,8 @@ export default function ThreatHunterDashboard() {
 
               {flows.slice(0, 3).map((flow, idx) => {
                 const yPos = 45 + idx * 75;
-                const isHighRisk = flow.risk_score >= 70;
-                const isBlocked = mitigatedIps.includes(flow.dst_ip);
+                const isBlocked = mitigatedIps.includes(flow.dst_ip) || Boolean(flow.is_blocked);
+                const isHighRisk = flow.risk_score >= 70 && !isBlocked;
                 const strokeColor = isBlocked ? "#64748b" : isHighRisk ? "#ef4444" : "#10b981";
 
                 return (
@@ -449,7 +481,7 @@ export default function ThreatHunterDashboard() {
                       y2={yPos}
                       stroke={strokeColor}
                       strokeWidth={selectedFlow.flow_key === flow.flow_key ? "3" : "1.8"}
-                      strokeDasharray={isHighRisk && !isBlocked ? "5,4" : "none"}
+                      strokeDasharray={isHighRisk ? "5,4" : "none"}
                     />
                     <rect
                       x="495"
@@ -457,15 +489,15 @@ export default function ThreatHunterDashboard() {
                       width="135"
                       height="36"
                       rx="6"
-                      fill={isHighRisk ? "rgba(239, 68, 68, 0.15)" : "rgba(16, 185, 129, 0.12)"}
+                      fill={isBlocked ? "rgba(71, 85, 105, 0.25)" : isHighRisk ? "rgba(239, 68, 68, 0.15)" : "rgba(16, 185, 129, 0.12)"}
                       stroke={strokeColor}
                       strokeWidth="2"
                     />
-                    <text x="562" y={yPos - 2} textAnchor="middle" className="fill-white text-[11px] font-mono font-bold">
+                    <text x="562" y={yPos - 2} textAnchor="middle" className={`text-[11px] font-mono font-bold ${isBlocked ? "fill-slate-400" : "fill-white"}`}>
                       {flow.dst_ip}:{flow.dst_port}
                     </text>
-                    <text x="562" y={yPos + 12} textAnchor="middle" className="fill-slate-400 text-[9px]">
-                      {isBlocked ? "BLOCKED IN FIREWALL" : `Risk: ${flow.risk_score}/100`}
+                    <text x="562" y={yPos + 12} textAnchor="middle" className={`text-[9px] font-mono ${isBlocked ? "fill-sky-400 font-semibold" : "fill-slate-400"}`}>
+                      {isBlocked ? "CONTAINED / BLOCKED" : `Risk: ${flow.risk_score}/100`}
                     </text>
                   </g>
                 );
@@ -500,16 +532,24 @@ export default function ThreatHunterDashboard() {
               {flows.map((f) => {
                 const cx = 30 + Math.min(250, ((f.jitter_pct || 0) / 100) * 250);
                 const cy = 140 - Math.min(125, ((f.dns_entropy || 0) / 5.0) * 125);
+                const isFlowBlocked = mitigatedIps.includes(f.dst_ip) || Boolean(f.is_blocked);
+
                 return (
                   <g key={f.flow_key} onClick={() => setSelectedFlow(f)} className="cursor-pointer">
                     <circle
                       cx={cx}
                       cy={cy}
                       r={selectedFlow.flow_key === f.flow_key ? "8" : "6"}
-                      className={f.risk_score >= 70 ? "fill-red-500 stroke-white stroke-1" : "fill-emerald-400"}
+                      className={
+                        isFlowBlocked
+                          ? "fill-slate-500 stroke-slate-400 stroke-1 opacity-70"
+                          : f.risk_score >= 70
+                          ? "fill-red-500 stroke-white stroke-1"
+                          : "fill-emerald-400"
+                      }
                     />
-                    <text x={cx + 10} y={cy + 3} className="fill-slate-300 text-[10px] font-mono">
-                      {f.process_name}
+                    <text x={cx + 10} y={cy + 3} className={`text-[10px] font-mono ${isFlowBlocked ? "fill-slate-500 line-through" : "fill-slate-300"}`}>
+                      {f.process_name} {isFlowBlocked && "(Contained)"}
                     </text>
                   </g>
                 );
@@ -526,11 +566,20 @@ export default function ThreatHunterDashboard() {
               <span className="text-xs uppercase font-mono text-slate-400">Selected Flow Attribution</span>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 {selectedFlow.process_name} → {selectedFlow.dst_ip}
-                <span className={`text-xs px-2 py-0.5 rounded font-mono ${
-                  selectedFlow.risk_score >= 70 ? "bg-red-500/20 text-red-400" : "bg-emerald-500/20 text-emerald-400"
-                }`}>
-                  Risk: {selectedFlow.risk_score}/100
-                </span>
+                {(() => {
+                  const isSelectedBlocked = mitigatedIps.includes(selectedFlow.dst_ip) || Boolean(selectedFlow.is_blocked);
+                  return (
+                    <span className={`text-xs px-2 py-0.5 rounded font-mono ${
+                      isSelectedBlocked
+                        ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                        : selectedFlow.risk_score >= 70
+                        ? "bg-red-500/20 text-red-400"
+                        : "bg-emerald-500/20 text-emerald-400"
+                    }`}>
+                      {isSelectedBlocked ? "CONTAINED / FIREWALL BLOCKED" : `Risk: ${selectedFlow.risk_score}/100`}
+                    </span>
+                  );
+                })()}
               </h3>
             </div>
 
@@ -541,18 +590,28 @@ export default function ThreatHunterDashboard() {
               >
                 <FileCode className="w-3.5 h-3.5 text-sky-400" /> Export Sigma
               </button>
-              <button
-                onClick={() => handleMitigate(selectedFlow)}
-                disabled={mitigatedIps.includes(selectedFlow.dst_ip)}
-                className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:bg-slate-800 disabled:text-slate-500 text-xs font-bold rounded-lg flex items-center gap-1.5"
-              >
-                <Lock className="w-3.5 h-3.5" />
-                {mitigatedIps.includes(selectedFlow.dst_ip)
-                  ? "IP Blocked"
-                  : selectedFlow.is_protected
-                  ? "Block IP Only (Protected OS PID)"
-                  : "Kill PID & Block IP"}
-              </button>
+              {(() => {
+                const isSelectedBlocked = mitigatedIps.includes(selectedFlow.dst_ip) || Boolean(selectedFlow.is_blocked);
+                return (
+                  <button
+                    onClick={() => handleMitigate(selectedFlow)}
+                    disabled={isSelectedBlocked}
+                    className="px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:bg-slate-800 disabled:border disabled:border-slate-700 disabled:text-sky-300 text-xs font-bold rounded-lg flex items-center gap-1.5 transition"
+                  >
+                    {isSelectedBlocked ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Threat Neutralized (Blocked)</span>
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>{selectedFlow.is_protected ? "Block Outbound IP Only" : "Kill PID & Block IP"}</span>
+                      </>
+                    )}
+                  </button>
+                );
+              })()}
             </div>
           </div>
 

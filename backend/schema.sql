@@ -67,6 +67,14 @@ CREATE TABLE IF NOT EXISTS urlscan_cache (
     last_checked DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS blocked_ips (
+    ip TEXT PRIMARY KEY,
+    pid INTEGER,
+    reason TEXT,
+    blocked_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_blocked_ips_ip ON blocked_ips(ip);
+
 CREATE TABLE IF NOT EXISTS canary_alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,

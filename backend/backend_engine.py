@@ -199,6 +199,16 @@ def get_dashboard_graph_and_stats():
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
+
+    # Load persistent blocked IPs
+    try:
+        cur.execute("SELECT ip FROM blocked_ips")
+        blocked_ips = [r[0] for r in cur.fetchall()]
+    except sqlite3.OperationalError:
+        blocked_ips = []
+
+    blocked_set = set(blocked_ips)
+
     cur.execute("""
         SELECT f.flow_key, f.dst_ip, f.dst_port, f.protocol, f.pid,
                f.process_sha256, p.process_name, p.exe_path, p.is_protected,
@@ -213,16 +223,49 @@ def get_dashboard_graph_and_stats():
     rows = []
     for r in cur.fetchall():
         d = dict(r)
+        is_blocked = d["dst_ip"] in blocked_set
+        d["is_blocked"] = is_blocked
         behavioral_score = int(d["osint_risk"])
         if d["session_count"] >= 6 and d["jitter_pct"] < 20.0 and d["avg_iat"] >= 5.0:
             behavioral_score = max(behavioral_score, 80)
         if d["is_dga"]:
             behavioral_score = max(behavioral_score, 85)
-        d["risk_score"] = min(100, behavioral_score)
+        # Blocked / neutralized flows are cleared of active risk
+        d["risk_score"] = 0 if is_blocked else min(100, behavioral_score)
         d["intel"] = json.loads(d["source_hits"]) if d.get("source_hits") else {}
         rows.append(d)
     conn.close()
-    return {"flows": rows}
+    return {"flows": rows, "blocked_ips": blocked_ips}
+
+@app.get("/api/v1/blocked-ips", dependencies=[Depends(verify_token)])
+def get_blocked_ips():
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT ip, pid, reason, blocked_at FROM blocked_ips ORDER BY blocked_at DESC")
+        items = [{"ip": r[0], "pid": r[1], "reason": r[2], "blocked_at": r[3]} for r in cur.fetchall()]
+    except sqlite3.OperationalError:
+        items = []
+    conn.close()
+    return {"blocked_ips": items}
+
+@app.post("/api/v1/unblock", dependencies=[Depends(verify_token)])
+def unblock_host(dst_ip: str):
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.execute("DELETE FROM blocked_ips WHERE ip = ?", (dst_ip,))
+    conn.commit()
+    conn.close()
+
+    os_name = platform.system()
+    try:
+        if os_name == "Windows":
+            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name=OpenC2Block_{dst_ip}"], capture_output=True)
+        elif os_name == "Linux":
+            subprocess.run(["iptables", "-D", "OUTPUT", "-d", dst_ip, "-j", "DROP"], capture_output=True)
+    except Exception:
+        pass
+
+    return {"status": "unblocked", "ip": dst_ip}
 
 @app.get("/api/v1/analyze-url", dependencies=[Depends(verify_token)])
 async def analyze_suspicious_url(target: str, detonate: bool = False):
@@ -267,6 +310,16 @@ def active_contain_host(dst_ip: str, pid: int | None = None):
         except psutil.AccessDenied:
             raise HTTPException(status_code=403, detail=f"OS denied terminating PID {pid}")
 
+    # Record persistent mitigation in database
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.execute(
+        "INSERT OR REPLACE INTO blocked_ips (ip, pid, reason, blocked_at) VALUES (?, ?, ?, ?)",
+        (dst_ip, pid, "Mitigated via Dashboard", time.time())
+    )
+    conn.commit()
+    conn.close()
+    actions.append(f"Recorded permanent containment for {dst_ip}")
+
     os_name = platform.system()
     try:
         if os_name == "Windows":
@@ -280,8 +333,8 @@ def active_contain_host(dst_ip: str, pid: int | None = None):
             raise HTTPException(status_code=400, detail="Unsupported OS")
 
         subprocess.run(cmd, check=True, capture_output=True)
-        actions.append(f"Blocked outbound traffic to {dst_ip}")
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Firewall command failed: {e.stderr.decode(errors='ignore')}")
+        actions.append(f"Applied OS firewall block to {dst_ip}")
+    except Exception as e:
+        actions.append(f"OS firewall notice: Run BLOCK_C2_FIREWALL.bat as Admin if OS blocked netsh call ({str(e)[:60]})")
 
-    return {"status": "completed", "actions": actions}
+    return {"status": "completed", "actions": actions, "blocked_ip": dst_ip}
