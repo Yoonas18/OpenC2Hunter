@@ -1,0 +1,42 @@
+# ==========================================
+# OpenC2Hunter .gitignore
+# ==========================================
+
+# Local SQLite Databases & WAL Journal Files
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# Environment Variables & Secret API Keys
+.env
+.env.local
+
+# Python Virtual Environments & Bytecode
+.venv/
+env/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Node.js Frontend Artifacts
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+
+# OS Specific Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE & Editor Settings
+.vscode/
+.idea/
+*.swp
+*.swo

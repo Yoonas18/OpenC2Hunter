@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  openc2-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: openc2-backend
+    restart: unless-stopped
+    network_mode: "host"
+    pid: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_PTRACE
+    environment:
+      - VT_API_KEY=${VT_API_KEY:-}
+      - ABUSE_CH_KEY=${ABUSE_CH_KEY:-}
+      - URLSCAN_API_KEY=${URLSCAN_API_KEY:-}
+      - ENABLE_CANARIES=${ENABLE_CANARIES:-false}
+      - OPENC2_SESSION_TOKEN=${OPENC2_SESSION_TOKEN:-local_docker_session_token_change_me}
+      - DB_PATH=/app/data/telemetry.db
+    volumes:
+      - ./data:/app/data
+
+  openc2-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_OPENC2_TOKEN=${OPENC2_SESSION_TOKEN:-local_docker_session_token_change_me}
+        - VITE_DEMO_MODE=${VITE_DEMO_MODE:-false}
+    container_name: openc2-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    depends_on:
+      - openc2-backend

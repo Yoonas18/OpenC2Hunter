@@ -1,0 +1,34 @@
+# ==========================================
+# OpenC2Hunter .dockerignore
+# ==========================================
+
+# Git Version Control
+.git
+.gitignore
+.github/
+
+# Local Databases & Logs
+*.db
+*.db-wal
+*.db-shm
+data/
+*.log
+
+# Environment Variables & Secrets
+.env
+.env.local
+
+# Python Local Environments & Caches
+.venv/
+__pycache__/
+*.pyc
+
+# Frontend Source Build Artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Documentation & Misc
+README.md
+docs/
+*.pdf
+*.docx
