@@ -1,13 +1,14 @@
-import os
-import time
+import hashlib
 import math
+import os
 import socket
 import sqlite3
-import hashlib
 import threading
+import time
 from collections import Counter, deque
+
 import psutil
-from scapy.all import sniff, IP, TCP, UDP, DNS, DNSQR, Raw
+from scapy.all import DNS, DNSQR, IP, TCP, UDP, Raw, sniff
 
 DB_PATH = os.getenv("DB_PATH", "telemetry.db")
 

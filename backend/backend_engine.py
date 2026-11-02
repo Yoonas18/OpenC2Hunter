@@ -1,22 +1,28 @@
-import os
-import time
+import asyncio
+import ipaddress
 import json
+import os
+import platform
 import secrets
 import sqlite3
-import ipaddress
-import platform
-import threading
 import subprocess
-import asyncio
-from pathlib import Path
+import threading
+import time
 from contextlib import asynccontextmanager
-import psutil
+from pathlib import Path
+
 import httpx
-from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Header, Depends
+import psutil
+from canary_deception import HONEY_PORTS, start_canary_listeners
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from url_analyzer import sync_urlhaus_bulk_feed, lookup_urlhaus_local, analyze_with_urlscan, is_private_or_internal_target
-from canary_deception import start_canary_listeners, HONEY_PORTS
+from pydantic import BaseModel
+from url_analyzer import (
+    analyze_with_urlscan,
+    is_private_or_internal_target,
+    lookup_urlhaus_local,
+    sync_urlhaus_bulk_feed,
+)
 
 DB_PATH = os.getenv("DB_PATH", "telemetry.db")
 VT_API_KEY = os.getenv("VT_API_KEY", "")

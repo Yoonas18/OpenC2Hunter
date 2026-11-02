@@ -1,7 +1,7 @@
-import os
-import time
 import asyncio
+import os
 import sqlite3
+import time
 from collections import defaultdict
 
 DB_PATH = os.getenv("DB_PATH", "telemetry.db")

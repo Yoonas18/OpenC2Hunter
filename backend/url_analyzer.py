@@ -1,10 +1,11 @@
-import os
 import csv
 import io
-import time
-import sqlite3
 import ipaddress
+import os
+import sqlite3
+import time
 from urllib.parse import urlparse
+
 import httpx
 
 DB_PATH = os.getenv("DB_PATH", "telemetry.db")

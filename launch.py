@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
+import ctypes
 import os
+import platform
+import secrets
+import subprocess
 import sys
 import time
-import ctypes
-import secrets
-import platform
-import subprocess
 import webbrowser
 from pathlib import Path
 
@@ -39,9 +39,9 @@ def main():
 
     print("=" * 72)
     print(f" OpenC2Hunter | OS: {os_name} | Admin/Root: {'YES' if elevated else 'NO (Socket Fallback)'}")
-    print(f" Bind Address : 127.0.0.1:8000 (Localhost-Only CSRF Protected)")
+    print(" Bind Address : 127.0.0.1:8000 (Localhost-Only CSRF Protected)")
     print(f" Canary Traps : {'ENABLED' if enable_canaries else 'DISABLED (Pass --enable-canaries to opt in)'}")
-    print(f" Lab Portal   : http://127.0.0.1:3000")
+    print(" Lab Portal   : http://127.0.0.1:3000")
     print(f" Credentials  : User: {admin_user} | Pass: {admin_pass} (Change in .env)")
     print("=" * 72)
 
