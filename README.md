@@ -1,14 +1,25 @@
-# 🛡️ OpenC2Hunter
+# OpenC2Hunter
 
-> **Autonomous AI-Powered C2 Beacon & Pre-Compromise Network Threat Hunter**
+<p align="center">
+  <img src="docs/banner.png" alt="OpenC2Hunter — Autonomous C2 Beacon & Network Threat Hunter" width="100%"/>
+</p>
 
-OpenC2Hunter monitors your live network traffic in real-time, detects **Command & Control (C2) beacons**, **DGA-generated malicious domains**, and **suspicious outbound connections** — **before attackers get a foothold**. It runs entirely on your local machine with no cloud dependency.
+<p align="center">
+  <strong>Autonomous AI-Powered C2 Beacon & Pre-Compromise Network Threat Hunter</strong>
+</p>
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green?logo=fastapi)
-![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)
-![License](https://img.shields.io/badge/License-MIT-yellow)
-![Tests](https://img.shields.io/badge/Tests-4%20Passed-brightgreen)
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&style=for-the-badge" alt="Python"/>
+  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&style=for-the-badge" alt="FastAPI"/>
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&style=for-the-badge" alt="React"/>
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"/>
+  <img src="https://img.shields.io/badge/Tests-4%20Passed-brightgreen?style=for-the-badge&logo=pytest" alt="Tests"/>
+  <img src="https://img.shields.io/badge/Platform-Win%20%7C%20Linux%20%7C%20macOS-informational?style=for-the-badge" alt="Platform"/>
+</p>
+
+---
+
+OpenC2Hunter monitors your live network traffic in real-time, detects **Command & Control (C2) beacons**, **DGA-generated malicious domains**, and **suspicious outbound connections** — **before attackers get a foothold**. Runs entirely on your local machine with zero cloud dependency.
 
 ---
 
