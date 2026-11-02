@@ -34,3 +34,4 @@ echo.
 echo [SUCCESS] Both C2 IPs have been permanently blocked in Windows Firewall!
 echo.
 pause
+

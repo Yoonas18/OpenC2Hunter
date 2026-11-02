@@ -56,3 +56,4 @@ All checks must pass before opening a PR.
 
 ## Legal
 By contributing, you agree your contributions will be licensed under the [MIT License](LICENSE).
+

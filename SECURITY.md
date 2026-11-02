@@ -27,3 +27,4 @@ You can expect a response within **72 hours**. We take all security reports seri
 - **Private IP guard** — refuses to analyze or block RFC-1918 / loopback addresses
 - **Critical PID protection** — will never terminate system processes
 - **No external telemetry** — zero data leaves your machine unless you configure BYOK API keys
+

@@ -34,10 +34,15 @@ def main():
     env["DB_PATH"] = str(DB_PATH)
     env["ENABLE_CANARIES"] = "true" if enable_canaries else "false"
 
+    admin_user = env.get("ADMIN_USERNAME", "superadmin")
+    admin_pass = env.get("ADMIN_PASSWORD", "OpenC2Hunter@2026!")
+
     print("=" * 72)
     print(f" OpenC2Hunter | OS: {os_name} | Admin/Root: {'YES' if elevated else 'NO (Socket Fallback)'}")
     print(f" Bind Address : 127.0.0.1:8000 (Localhost-Only CSRF Protected)")
     print(f" Canary Traps : {'ENABLED' if enable_canaries else 'DISABLED (Pass --enable-canaries to opt in)'}")
+    print(f" Lab Portal   : http://127.0.0.1:3000")
+    print(f" Credentials  : User: {admin_user} | Pass: {admin_pass} (Change in .env)")
     print("=" * 72)
 
     processes = []

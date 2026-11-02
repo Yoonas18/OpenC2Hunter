@@ -12,6 +12,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 import psutil
 import httpx
+from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from url_analyzer import sync_urlhaus_bulk_feed, lookup_urlhaus_local, analyze_with_urlscan, is_private_or_internal_target
@@ -22,6 +23,12 @@ VT_API_KEY = os.getenv("VT_API_KEY", "")
 ABUSE_CH_KEY = os.getenv("ABUSE_CH_KEY", "")
 ENABLE_CANARIES = os.getenv("ENABLE_CANARIES", "false").lower() == "true"
 SESSION_TOKEN = os.getenv("OPENC2_SESSION_TOKEN") or secrets.token_urlsafe(32)
+
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "superadmin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "OpenC2Hunter@2026!")
+
+# Active sessions store (session token -> expiry/metadata)
+ACTIVE_SESSIONS = {SESSION_TOKEN: {"username": ADMIN_USERNAME, "created_at": time.time()}}
 
 PROTECTED_PROCESS_NAMES = {
     "system", "idle", "registry", "smss.exe", "csrss.exe", "wininit.exe",
@@ -54,9 +61,63 @@ app.add_middleware(
     allow_headers=["X-OpenC2-Token", "Content-Type"],
 )
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+FAILED_LOGINS = {}
+
+@app.post("/api/v1/auth/login")
+def login(creds: LoginRequest):
+    now = time.time()
+    # Simple rate-limit check (5 failed attempts per 5 minutes)
+    ip_key = creds.username.lower()
+    recent_failures = [t for t in FAILED_LOGINS.get(ip_key, []) if now - t < 300]
+    FAILED_LOGINS[ip_key] = recent_failures
+
+    if len(recent_failures) >= 5:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Gateway locked for 5 minutes."
+        )
+
+    user_match = secrets.compare_digest(creds.username, ADMIN_USERNAME)
+    pass_match = secrets.compare_digest(creds.password, ADMIN_PASSWORD)
+
+    if not (user_match and pass_match):
+        FAILED_LOGINS.setdefault(ip_key, []).append(now)
+        raise HTTPException(status_code=401, detail="Invalid administrator credentials.")
+
+    # Successful login: clear failures and issue token
+    FAILED_LOGINS.pop(ip_key, None)
+    new_token = secrets.token_urlsafe(32)
+    ACTIVE_SESSIONS[new_token] = {"username": ADMIN_USERNAME, "created_at": now}
+
+    return {
+        "status": "authenticated",
+        "token": new_token,
+        "username": ADMIN_USERNAME,
+        "expires_in": 86400
+    }
+
+@app.get("/api/v1/auth/verify")
+def check_auth(x_openc2_token: str = Header(...)):
+    if x_openc2_token not in ACTIVE_SESSIONS and not secrets.compare_digest(x_openc2_token, SESSION_TOKEN):
+        raise HTTPException(status_code=403, detail="Session expired or invalid.")
+    return {"status": "valid", "username": ADMIN_USERNAME}
+
+@app.post("/api/v1/auth/logout")
+def logout(x_openc2_token: str = Header(...)):
+    ACTIVE_SESSIONS.pop(x_openc2_token, None)
+    return {"status": "logged_out"}
+
 def verify_token(x_openc2_token: str = Header(...)):
-    if not secrets.compare_digest(x_openc2_token, SESSION_TOKEN):
-        raise HTTPException(status_code=403, detail="Forbidden: Invalid X-OpenC2-Token")
+    is_valid = (
+        x_openc2_token in ACTIVE_SESSIONS
+        or secrets.compare_digest(x_openc2_token, SESSION_TOKEN)
+    )
+    if not is_valid:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid or expired X-OpenC2-Token")
 
 def is_safe_blockable_ip(ip_str: str) -> bool:
     if not ip_str or ip_str in SAFE_INFRA_IPS:

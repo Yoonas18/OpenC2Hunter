@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import {
   ShieldAlert, Activity, Terminal, Lock, Globe,
-  ExternalLink, FileCode, CheckCircle2, AlertTriangle
+  ExternalLink, FileCode, CheckCircle2, AlertTriangle,
+  User, LogOut, KeyRound, ShieldCheck
 } from "lucide-react";
 
 const API_TOKEN = import.meta.env.VITE_OPENC2_TOKEN || "";
@@ -92,13 +93,66 @@ export default function ThreatHunterDashboard() {
   const [mitigatedIps, setMitigatedIps] = useState([]);
   const [sigmaModal, setSigmaModal] = useState(false);
 
+  // Authentication states
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem("openc2_auth_token") || API_TOKEN || "");
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState("superadmin");
+  const [authChecking, setAuthChecking] = useState(true);
+
+  // Login form states
+  const [usernameInput, setUsernameInput] = useState("superadmin");
+  const [passwordInput, setPasswordInput] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Verify existing token on initial load
   useEffect(() => {
-    if (IS_DEMO_MODE) return;
-    const headers = { "X-OpenC2-Token": API_TOKEN };
+    if (IS_DEMO_MODE) {
+      setIsAuthenticated(true);
+      setAuthChecking(false);
+      return;
+    }
+
+    const tokenToVerify = authToken || API_TOKEN;
+    if (!tokenToVerify) {
+      setIsAuthenticated(false);
+      setAuthChecking(false);
+      return;
+    }
+
+    fetch("http://127.0.0.1:8000/api/v1/auth/verify", {
+      headers: { "X-OpenC2-Token": tokenToVerify }
+    })
+      .then((res) => {
+        if (res.ok) {
+          setIsAuthenticated(true);
+          setAuthToken(tokenToVerify);
+          localStorage.setItem("openc2_auth_token", tokenToVerify);
+        } else {
+          setIsAuthenticated(false);
+          localStorage.removeItem("openc2_auth_token");
+        }
+      })
+      .catch(() => {
+        setIsAuthenticated(false);
+      })
+      .finally(() => {
+        setAuthChecking(false);
+      });
+  }, []);
+
+  // Polling data when authenticated
+  useEffect(() => {
+    if (!isAuthenticated || IS_DEMO_MODE) return;
+    const headers = { "X-OpenC2-Token": authToken };
 
     const interval = setInterval(async () => {
       try {
         const res = await fetch("http://127.0.0.1:8000/api/v1/graph-stats", { headers });
+        if (res.status === 401 || res.status === 403) {
+          handleLogout();
+          return;
+        }
         if (res.ok) {
           const data = await res.json();
           if (data.flows && data.flows.length > 0) {
@@ -111,11 +165,59 @@ export default function ThreatHunterDashboard() {
           if (cData.alerts) setCanaryAlerts(cData.alerts);
         }
       } catch {
-        // Fallback to demo state if local daemon isn't running
+        // Handled silently
       }
     }, 3000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isAuthenticated, authToken]);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError("");
+    setIsSubmitting(true);
+
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: usernameInput.trim(),
+          password: passwordInput
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok && data.token) {
+        setAuthToken(data.token);
+        localStorage.setItem("openc2_auth_token", data.token);
+        setCurrentUser(data.username || "superadmin");
+        setIsAuthenticated(true);
+        setPasswordInput("");
+      } else {
+        setLoginError(data.detail || "Access Denied: Invalid credentials.");
+      }
+    } catch {
+      setLoginError("Connection failed to backend API (http://127.0.0.1:8000). Ensure the backend is active.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (authToken) {
+      try {
+        await fetch("http://127.0.0.1:8000/api/v1/auth/logout", {
+          method: "POST",
+          headers: { "X-OpenC2-Token": authToken }
+        });
+      } catch {
+        // Ignore
+      }
+    }
+    localStorage.removeItem("openc2_auth_token");
+    setAuthToken("");
+    setIsAuthenticated(false);
+  };
 
   const handleMitigate = async (flow) => {
     if (!IS_DEMO_MODE) {
@@ -123,7 +225,7 @@ export default function ThreatHunterDashboard() {
         const pidParam = flow.is_protected ? "" : `&pid=${flow.pid}`;
         await fetch(`http://127.0.0.1:8000/api/v1/mitigate?dst_ip=${flow.dst_ip}${pidParam}`, {
           method: "POST",
-          headers: { "X-OpenC2-Token": API_TOKEN }
+          headers: { "X-OpenC2-Token": authToken }
         });
       } catch {
         // Handled
@@ -131,6 +233,123 @@ export default function ThreatHunterDashboard() {
     }
     setMitigatedIps((prev) => [...prev, flow.dst_ip]);
   };
+
+  // If verifying session initially
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 font-mono">
+        <div className="w-10 h-10 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-sm">Verifying Security Session...</p>
+      </div>
+    );
+  }
+
+  // Login Gate Screen
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden font-sans">
+        {/* Subtle cyber background grid */}
+        <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px] opacity-40" />
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        <div className="relative w-full max-w-md bg-slate-900/90 border border-slate-800 shadow-2xl rounded-2xl p-8 backdrop-blur-xl">
+          {/* Header */}
+          <div className="flex flex-col items-center text-center mb-6">
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-2xl mb-3 shadow-lg shadow-red-500/10">
+              <ShieldAlert className="w-9 h-9 text-red-500" />
+            </div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">OpenC2Hunter</h1>
+            <p className="text-xs font-mono text-emerald-400 tracking-wider uppercase mt-1">
+              SOC Security Gateway
+            </p>
+            <p className="text-xs text-slate-400 mt-1">
+              Authenticate to access the live threat hunting workbench
+            </p>
+          </div>
+
+          {/* Error Banner */}
+          {loginError && (
+            <div className="mb-4 p-3 bg-red-500/15 border border-red-500/40 rounded-lg flex items-center gap-2.5 text-xs text-red-300">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{loginError}</span>
+            </div>
+          )}
+
+          {/* Form */}
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-mono uppercase text-slate-300 mb-1.5">
+                Username / Role
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+                  <User className="w-4 h-4" />
+                </div>
+                <input
+                  type="text"
+                  required
+                  value={usernameInput}
+                  onChange={(e) => setUsernameInput(e.target.value)}
+                  placeholder="superadmin"
+                  className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-mono uppercase text-slate-300 mb-1.5">
+                Lab Password
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <input
+                  type="password"
+                  required
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="••••••••••••"
+                  className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 font-mono"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold text-sm rounded-lg shadow-lg shadow-emerald-900/30 transition duration-150 flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {isSubmitting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Verifying Credentials...</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Authenticate & Enter Lab</span>
+                </>
+              )}
+            </button>
+          </form>
+
+          {/* Quick Info Box */}
+          <div className="mt-6 p-3 bg-slate-950/70 border border-slate-800 rounded-lg text-[11px] text-slate-400 font-mono space-y-1">
+            <div className="flex justify-between text-slate-300 font-semibold border-b border-slate-800 pb-1 mb-1">
+              <span>Default Superadmin Credentials:</span>
+              <span className="text-emerald-400">ROLE: SUPERADMIN</span>
+            </div>
+            <div>Username: <span className="text-slate-200">superadmin</span></div>
+            <div>Password: <span className="text-slate-200">OpenC2Hunter@2026!</span></div>
+            <p className="text-[10px] text-slate-500 pt-1">
+              (Configurable via ADMIN_USERNAME & ADMIN_PASSWORD in .env)
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans p-4 select-none">
@@ -152,25 +371,43 @@ export default function ThreatHunterDashboard() {
           </div>
         </div>
 
-        <div className="flex gap-4">
-          <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-lg">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-lg">
             <span className="text-xs text-slate-400 block">Critical Flows</span>
             <span className="text-lg font-bold text-red-400">
               {flows.filter((f) => f.risk_score >= 70).length} Active
             </span>
           </div>
-          <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-lg">
+          <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-lg">
             <span className="text-xs text-slate-400 block">DGA / High Entropy</span>
             <span className="text-lg font-bold text-amber-400">
               {flows.filter((f) => f.is_dga).length} Flagged
             </span>
           </div>
-          <div className="bg-slate-900 border border-slate-800 px-4 py-2 rounded-lg">
-            <span className="text-xs text-slate-400 block">CSRF & Guardrails</span>
+          <div className="bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-lg">
+            <span className="text-xs text-slate-400 block">Security Status</span>
             <span className="text-sm font-semibold text-emerald-400 flex items-center gap-1 mt-1">
-              <CheckCircle2 className="w-4 h-4" /> Token Locked
+              <CheckCircle2 className="w-4 h-4" /> Lab Protected
             </span>
           </div>
+
+          {/* Superadmin User Badge & Logout */}
+          <div className="bg-slate-900 border border-emerald-500/30 px-3 py-1.5 rounded-lg flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <User className="w-4 h-4 text-emerald-400" />
+            <div className="text-left">
+              <span className="text-[10px] text-slate-400 block uppercase tracking-wider font-mono">Role</span>
+              <span className="text-xs font-semibold text-emerald-300 font-mono">{currentUser}</span>
+            </div>
+          </div>
+
+          <button
+            onClick={handleLogout}
+            className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+            title="Lock Laboratory Session"
+          >
+            <LogOut className="w-3.5 h-3.5" /> Lock Lab
+          </button>
         </div>
       </header>
 

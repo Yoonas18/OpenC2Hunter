@@ -105,6 +105,28 @@ sudo python3 launch.py
 
 **Step 6:** Open your browser → **http://127.0.0.1:3000** 🎉
 
+Login using your Superadmin credentials (see below).
+
+---
+
+## 🔐 Superadmin Lab Access & Authentication
+
+OpenC2Hunter includes an enterprise-grade SOC access gateway protecting all API endpoints and workbench telemetry:
+
+| Credential | Value | Config (.env) |
+|---|---|---|
+| **Default Username** | `superadmin` | `ADMIN_USERNAME=superadmin` |
+| **Default Password** | `OpenC2Hunter@2026!` | `ADMIN_PASSWORD=your_secure_password` |
+| **Session Lifetime** | 24 Hours | Cryptographically secure token (`token_urlsafe(32)`) |
+| **Brute-Force Guard** | Active | Rate-limits & locks gateway for 5 mins after 5 failed attempts |
+
+### Changing Credentials
+To set your own custom superadmin credentials, add them to your `.env` file:
+```env
+ADMIN_USERNAME=superadmin
+ADMIN_PASSWORD=YourSuperSecretPassword#2026!
+```
+
 ---
 
 ### Option 2 — Docker 🐳
@@ -227,6 +249,9 @@ All endpoints require the `X-OpenC2-Token` header (auto-set by the UI).
 
 | Method | Endpoint | Description |
 |---|---|---|
+| `POST` | `/api/v1/auth/login` | Authenticate with superadmin credentials & receive session token |
+| `GET` | `/api/v1/auth/verify` | Validate existing session token |
+| `POST` | `/api/v1/auth/logout` | Revoke session token & lock lab |
 | `GET` | `/api/v1/graph-stats` | Get all live flows with risk scores |
 | `GET` | `/api/v1/analyze-url?target=<url>` | Analyze a URL/domain for threats |
 | `GET` | `/api/v1/canary-alerts` | Get honeypot canary alert log |
