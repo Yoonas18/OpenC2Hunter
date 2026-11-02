@@ -81,3 +81,39 @@ def test_superadmin_auth_flow():
     # After logout, token must be rejected
     res_after = client.get("/api/v1/graph-stats", headers={"X-OpenC2-Token": auth_token})
     assert res_after.status_code == 403
+
+def test_pbkdf2_password_hashing():
+    from backend_engine import hash_password, verify_password
+    hashed = hash_password("SecretPass123!")
+    assert hashed.startswith("pbkdf2:sha256:")
+    assert verify_password("SecretPass123!", hashed) is True
+    assert verify_password("WrongPassword!", hashed) is False
+
+def test_stix_and_yara_export():
+    headers = {"X-OpenC2-Token": "test_secret_token_123"}
+    # Test STIX 2.1 export
+    stix_res = client.get("/api/v1/export/stix?dst_ip=185.220.101.45&proc_name=python3.exe", headers=headers)
+    assert stix_res.status_code == 200
+    stix_data = stix_res.json()
+    assert stix_data["type"] == "bundle"
+    assert len(stix_data["objects"]) >= 4
+
+    # Test YARA rule export
+    yara_res = client.get("/api/v1/export/yara?dst_ip=185.220.101.45&proc_name=python3.exe", headers=headers)
+    assert yara_res.status_code == 200
+    assert "rule OpenC2Hunter_C2_" in yara_res.json()["rule"]
+
+def test_canary_traps_management():
+    headers = {"X-OpenC2-Token": "test_secret_token_123"}
+    res = client.get("/api/v1/canary/traps", headers=headers)
+    assert res.status_code == 200
+    assert "traps" in res.json()
+    assert len(res.json()["traps"]) >= 4
+
+def test_process_memory_inspector():
+    headers = {"X-OpenC2-Token": "test_secret_token_123"}
+    res = client.get(f"/api/v1/process-memory-strings?pid={os.getpid()}", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "strings_extracted_count" in data
+    assert data["pid"] == os.getpid()

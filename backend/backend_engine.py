@@ -1,6 +1,8 @@
 import asyncio
+import hashlib
 import ipaddress
 import json
+import logging
 import os
 import platform
 import secrets
@@ -11,24 +13,51 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import httpx
 import psutil
-from canary_deception import HONEY_PORTS, start_canary_listeners
-from fastapi import Depends, FastAPI, Header, HTTPException
+from canary_deception import (
+    add_custom_canary,
+    get_active_traps_summary,
+    register_alert_callback,
+    start_canary_listeners,
+)
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from forensic_pcap import parse_pcap_forensics
+from process_memory import inspect_process_memory_and_binary
 from pydantic import BaseModel
+from threat_export import generate_stix21_bundle, generate_yara_rule
 from url_analyzer import (
     analyze_with_urlscan,
     is_private_or_internal_target,
     lookup_urlhaus_local,
     sync_urlhaus_bulk_feed,
 )
+from webhooks import send_discord_alert, send_slack_alert
+
+# --- Structured Logging Setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("openc2hunter.engine")
 
 DB_PATH = os.getenv("DB_PATH", "telemetry.db")
 VT_API_KEY = os.getenv("VT_API_KEY", "")
 ABUSE_CH_KEY = os.getenv("ABUSE_CH_KEY", "")
 ENABLE_CANARIES = os.getenv("ENABLE_CANARIES", "false").lower() == "true"
 SESSION_TOKEN = os.getenv("OPENC2_SESSION_TOKEN") or secrets.token_urlsafe(32)
+
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "superadmin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "OpenC2Hunter@2026!")
@@ -42,6 +71,73 @@ PROTECTED_PROCESS_NAMES = {
     "systemd", "init", "launchd", "kernel_task", "sshd", "dockerd", "python", "python3", "python.exe"
 }
 SAFE_INFRA_IPS = {"127.0.0.1", "0.0.0.0", "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9"}
+
+def hash_password(password: str, salt: bytes | None = None) -> str:
+    """Derives a PBKDF2-HMAC-SHA256 password hash for hardened credential storage."""
+    if salt is None:
+        salt = secrets.token_bytes(16)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100000)
+    return f"pbkdf2:sha256:100000:{salt.hex()}:{key.hex()}"
+
+def verify_password(plain_password: str, stored_hash_or_plain: str) -> bool:
+    """Validates passwords securely against PBKDF2 hashes or plaintext configs with timing safety."""
+    if stored_hash_or_plain.startswith("pbkdf2:sha256:"):
+        parts = stored_hash_or_plain.split(":")
+        if len(parts) == 5:
+            iterations = int(parts[2])
+            salt = bytes.fromhex(parts[3])
+            expected_key = parts[4]
+            actual_key = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt, iterations).hex()
+            return secrets.compare_digest(actual_key, expected_key)
+    return secrets.compare_digest(plain_password, stored_hash_or_plain)
+
+# --- Real-Time WebSocket Connection Manager ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"WebSocket client connected. Active connections: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            logger.info(f"WebSocket client disconnected. Remaining: {len(self.active_connections)}")
+
+    async def broadcast(self, event_type: str, data: dict):
+        if not self.active_connections:
+            return
+        payload = json.dumps({"event": event_type, "data": data, "timestamp": time.time()})
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_text(payload)
+            except Exception:
+                self.disconnect(connection)
+
+ws_manager = ConnectionManager()
+
+# Asynchronous handler called whenever a canary trap fires
+async def on_canary_alert_dispatched(alert_event: dict):
+    # Broadcast to live UI via WebSockets
+    await ws_manager.broadcast("canary_alert", alert_event)
+    
+    # Auto-dispatch webhooks if configured
+    threat_info = {
+        "title": f"Canary Trap Tripped: {alert_event.get('service')}",
+        "description": f"Internal probe detected from {alert_event.get('attacker_ip')}:{alert_event.get('attacker_port')}",
+        "target": f"Port {alert_event.get('port')}",
+        "process": alert_event.get("service"),
+        "risk_score": 85,
+        "attribution": alert_event.get("classification")
+    }
+    if DISCORD_WEBHOOK_URL:
+        asyncio.create_task(send_discord_alert(DISCORD_WEBHOOK_URL, threat_info))
+    if SLACK_WEBHOOK_URL:
+        asyncio.create_task(send_slack_alert(SLACK_WEBHOOK_URL, threat_info))
+
+register_alert_callback(on_canary_alert_dispatched)
 
 def init_db_schema():
     schema_file = Path(__file__).parent / "schema.sql"
@@ -58,12 +154,12 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(start_canary_listeners())
     yield
 
-app = FastAPI(title="OpenC2Hunter Hardened API", lifespan=lifespan)
+app = FastAPI(title="OpenC2Hunter Enterprise Threat Engine", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:3000", "http://localhost:3000"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["X-OpenC2-Token", "Content-Type"],
 )
 
@@ -71,12 +167,21 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class CanaryTrapRequest(BaseModel):
+    port: int
+    service_name: str
+    banner: str = "OK\r\n"
+    protocol: str = "tcp"
+
+class WebhookTestRequest(BaseModel):
+    webhook_url: str
+    platform: str = "discord"
+
 FAILED_LOGINS = {}
 
 @app.post("/api/v1/auth/login")
 def login(creds: LoginRequest):
     now = time.time()
-    # Simple rate-limit check (5 failed attempts per 5 minutes)
     ip_key = creds.username.lower()
     recent_failures = [t for t in FAILED_LOGINS.get(ip_key, []) if now - t < 300]
     FAILED_LOGINS[ip_key] = recent_failures
@@ -88,17 +193,17 @@ def login(creds: LoginRequest):
         )
 
     user_match = secrets.compare_digest(creds.username, ADMIN_USERNAME)
-    pass_match = secrets.compare_digest(creds.password, ADMIN_PASSWORD)
+    pass_match = verify_password(creds.password, ADMIN_PASSWORD)
 
     if not (user_match and pass_match):
         FAILED_LOGINS.setdefault(ip_key, []).append(now)
         raise HTTPException(status_code=401, detail="Invalid administrator credentials.")
 
-    # Successful login: clear failures and issue token
     FAILED_LOGINS.pop(ip_key, None)
     new_token = secrets.token_urlsafe(32)
     ACTIVE_SESSIONS[new_token] = {"username": ADMIN_USERNAME, "created_at": now}
 
+    logger.info(f"Administrator authenticated successfully. New session: {new_token[:8]}...")
     return {
         "status": "authenticated",
         "token": new_token,
@@ -141,72 +246,29 @@ def is_safe_blockable_ip(ip_str: str) -> bool:
     except ValueError:
         return False
 
-async def enrich_ioc(ioc_value: str, ioc_type: str) -> dict:
-    if ioc_type == "ip" and not is_safe_blockable_ip(ioc_value):
-        return {"ioc": ioc_value, "risk_score": 0, "intel": {}, "cached": True}
-
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-    cur = conn.cursor()
-    cur.execute("SELECT risk_score, source_hits FROM osint_cache WHERE ioc_value = ?", (ioc_value,))
-    row = cur.fetchone()
-    if row:
-        conn.close()
-        return {"ioc": ioc_value, "risk_score": row[0], "intel": json.loads(row[1]), "cached": True}
-
-    intel_summary, risk_score = {}, 0
+# --- WebSockets Telemetry Endpoint ---
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry(websocket: WebSocket, token: str | None = None):
+    # Validate session token if provided
+    if token and token not in ACTIVE_SESSIONS and not secrets.compare_digest(token, SESSION_TOKEN):
+        await websocket.close(code=1008)
+        return
+    await ws_manager.connect(websocket)
     try:
-        async with httpx.AsyncClient(timeout=4.0) as client:
-            if ioc_type == "ip":
-                r = await client.get(f"https://internetdb.shodan.io/{ioc_value}")
-                if r.status_code == 200:
-                    data = r.json()
-                    intel_summary["shodan_ports"] = data.get("ports", [])
-                    intel_summary["shodan_tags"] = data.get("tags", [])
-                    intel_summary["vulns"] = data.get("vulns", [])
-                    if any(t in ["c2", "malware", "compromised", "tor"] for t in intel_summary["shodan_tags"]):
-                        risk_score += 60
+        while True:
+            client_msg = await websocket.receive_text()
+            if client_msg == "ping":
+                await websocket.send_text(json.dumps({"event": "pong"}))
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
 
-                tf_headers = {"Auth-Key": ABUSE_CH_KEY} if ABUSE_CH_KEY else {}
-                tf_resp = await client.post(
-                    "https://threatfox-api.abuse.ch/api/v1/",
-                    json={"query": "search_ioc", "search_term": ioc_value},
-                    headers=tf_headers
-                )
-                if tf_resp.status_code == 200 and tf_resp.json().get("query_status") == "ok":
-                    hit = tf_resp.json()["data"][0]
-                    intel_summary["threatfox_malware"] = hit.get("malware_printable")
-                    risk_score = 95
-
-            elif ioc_type == "hash" and len(ioc_value) == 64 and not ioc_value.startswith("PROTECTED:"):
-                if VT_API_KEY:
-                    vt_resp = await client.get(
-                        f"https://www.virustotal.com/api/v3/files/{ioc_value}",
-                        headers={"x-apikey": VT_API_KEY}
-                    )
-                    if vt_resp.status_code == 200:
-                        stats = vt_resp.json()["data"]["attributes"]["last_analysis_stats"]
-                        mal = stats.get("malicious", 0)
-                        intel_summary["vt_detections"] = f"{mal}/{sum(stats.values())}"
-                        if mal > 0:
-                            risk_score = min(100, 40 + (mal * 10))
-    except Exception:
-        pass
-
-    cur.execute(
-        "INSERT OR REPLACE INTO osint_cache (ioc_value, ioc_type, risk_score, source_hits, last_updated) VALUES (?, ?, ?, ?, ?)",
-        (ioc_value, ioc_type, risk_score, json.dumps(intel_summary), time.time())
-    )
-    conn.commit()
-    conn.close()
-    return {"ioc": ioc_value, "risk_score": risk_score, "intel": intel_summary, "cached": False}
-
+# --- Telemetry & Graphs ---
 @app.get("/api/v1/graph-stats", dependencies=[Depends(verify_token)])
 def get_dashboard_graph_and_stats():
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    # Load persistent blocked IPs
     try:
         cur.execute("SELECT ip FROM blocked_ips")
         blocked_ips = [r[0] for r in cur.fetchall()]
@@ -236,13 +298,103 @@ def get_dashboard_graph_and_stats():
             behavioral_score = max(behavioral_score, 80)
         if d["is_dga"]:
             behavioral_score = max(behavioral_score, 85)
-        # Blocked / neutralized flows are cleared of active risk
         d["risk_score"] = 0 if is_blocked else min(100, behavioral_score)
         d["intel"] = json.loads(d["source_hits"]) if d.get("source_hits") else {}
         rows.append(d)
     conn.close()
     return {"flows": rows, "blocked_ips": blocked_ips}
 
+# --- Forensic PCAP Upload & Replay ---
+@app.post("/api/v1/forensics/upload-pcap", dependencies=[Depends(verify_token)])
+async def upload_pcap_forensics(file: UploadFile = File(...)):
+    """Accepts and parses an uploaded PCAP or PCAPNG packet capture for offline threat hunting."""
+    if not file.filename.lower().endswith((".pcap", ".pcapng", ".cap")):
+        raise HTTPException(status_code=400, detail="Only .pcap, .pcapng, and .cap packet captures are supported.")
+
+    file_bytes = await file.read()
+    if len(file_bytes) > 50 * 1024 * 1024:  # 50MB limit
+        raise HTTPException(status_code=400, detail="File too large. Maximum PCAP size is 50MB.")
+
+    try:
+        report = parse_pcap_forensics(file_bytes, db_path=DB_PATH)
+        # Notify connected dashboard clients of new forensic flows
+        asyncio.create_task(ws_manager.broadcast("pcap_analyzed", report))
+        return report
+    except Exception as e:
+        logger.error(f"Error parsing forensic PCAP: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse PCAP file: {e}")
+
+# --- Process Memory Strings Inspector ---
+@app.get("/api/v1/process-memory-strings", dependencies=[Depends(verify_token)])
+def get_process_memory_strings(pid: int):
+    """Inspects binary and runtime memory strings for a given PID to detect embedded C2 artifacts."""
+    if pid <= 0:
+        raise HTTPException(status_code=400, detail="Invalid PID")
+    res = inspect_process_memory_and_binary(pid)
+    if "error" in res:
+        raise HTTPException(status_code=404, detail=res["error"])
+    return res
+
+# --- Threat Intel Exporters (STIX 2.1 & YARA) ---
+@app.get("/api/v1/export/stix", dependencies=[Depends(verify_token)])
+def export_stix_bundle(dst_ip: str, proc_name: str = "implant", risk: int = 90):
+    flow_mock = {
+        "dst_ip": dst_ip,
+        "process_name": proc_name,
+        "risk_score": risk,
+        "avg_iat": 60.0,
+        "jitter_pct": 5.0,
+        "intel": {"threatfox_malware": "Detected C2 Channel"}
+    }
+    return generate_stix21_bundle(flow_mock)
+
+@app.get("/api/v1/export/yara", dependencies=[Depends(verify_token)])
+def export_yara_rule_endpoint(dst_ip: str, proc_name: str = "implant", dns: str = "", hex_preview: str = ""):
+    flow_mock = {
+        "dst_ip": dst_ip,
+        "process_name": proc_name,
+        "dns_query": dns,
+        "raw_preview": hex_preview,
+        "risk_score": 90
+    }
+    return {"rule": generate_yara_rule(flow_mock)}
+
+# --- Custom Honeypot Deception Traps ---
+@app.get("/api/v1/canary/traps", dependencies=[Depends(verify_token)])
+def list_canary_traps():
+    return {"traps": get_active_traps_summary()}
+
+@app.post("/api/v1/canary/add-trap", dependencies=[Depends(verify_token)])
+async def add_canary_trap_endpoint(req: CanaryTrapRequest):
+    if req.port < 1 or req.port > 65535:
+        raise HTTPException(status_code=400, detail="Invalid port number")
+    success = await add_custom_canary(req.port, req.service_name, req.banner, req.protocol)
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Port {req.port} is already configured or could not be bound.")
+    return {"status": "started", "port": req.port, "service": req.service_name}
+
+# --- Webhook Dispatch Test ---
+@app.post("/api/v1/webhooks/test", dependencies=[Depends(verify_token)])
+async def test_webhook(req: WebhookTestRequest):
+    test_threat = {
+        "title": "OpenC2Hunter Webhook Verification",
+        "description": "Integration test from OpenC2Hunter SOC Threat Defense Gateway",
+        "target": "185.220.101.45:8443",
+        "process": "test_implant.exe",
+        "pid": 1337,
+        "risk_score": 95,
+        "attribution": "Sliver C2 Simulation Test"
+    }
+    if req.platform.lower() == "slack":
+        ok = await send_slack_alert(req.webhook_url, test_threat)
+    else:
+        ok = await send_discord_alert(req.webhook_url, test_threat)
+
+    if not ok:
+        raise HTTPException(status_code=400, detail="Webhook delivery failed. Verify URL endpoint.")
+    return {"status": "success", "message": f"Test alert dispatched to {req.platform}"}
+
+# --- Mitigation & Firewall Controls ---
 @app.get("/api/v1/blocked-ips", dependencies=[Depends(verify_token)])
 def get_blocked_ips():
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
@@ -265,22 +417,13 @@ def unblock_host(dst_ip: str):
     os_name = platform.system()
     try:
         if os_name == "Windows":
-            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name=OpenC2Block_{dst_ip}"], capture_output=True)
+            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name=OpenC2Block_{dst_ip}"], check=False, capture_output=True)
         elif os_name == "Linux":
-            subprocess.run(["iptables", "-D", "OUTPUT", "-d", dst_ip, "-j", "DROP"], capture_output=True)
+            subprocess.run(["iptables", "-D", "OUTPUT", "-d", dst_ip, "-j", "DROP"], check=False, capture_output=True)
     except Exception:
         pass
 
     return {"status": "unblocked", "ip": dst_ip}
-
-@app.get("/api/v1/analyze-url", dependencies=[Depends(verify_token)])
-async def analyze_suspicious_url(target: str, detonate: bool = False):
-    if is_private_or_internal_target(target):
-        raise HTTPException(status_code=400, detail="Refusing to analyze private/internal address")
-    urlhaus_hit = lookup_urlhaus_local(target)
-    urlscan_data = await analyze_with_urlscan(target, explicit_user_detonate=detonate)
-    combined_risk = 100 if urlhaus_hit else urlscan_data.get("verdict_score", 0)
-    return {"target": target, "combined_risk_score": combined_risk, "urlhaus": urlhaus_hit, "urlscan": urlscan_data}
 
 @app.get("/api/v1/canary-alerts", dependencies=[Depends(verify_token)])
 def get_canary_alerts():
@@ -292,7 +435,7 @@ def get_canary_alerts():
     conn.close()
     return {
         "enabled": ENABLE_CANARIES,
-        "active_traps": [{"port": p, "service": c["service"]} for p, c in HONEY_PORTS.items()] if ENABLE_CANARIES else [],
+        "active_traps": get_active_traps_summary() if ENABLE_CANARIES else [],
         "alerts": alerts
     }
 
@@ -316,7 +459,6 @@ def active_contain_host(dst_ip: str, pid: int | None = None):
         except psutil.AccessDenied:
             raise HTTPException(status_code=403, detail=f"OS denied terminating PID {pid}")
 
-    # Record persistent mitigation in database
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.execute(
         "INSERT OR REPLACE INTO blocked_ips (ip, pid, reason, blocked_at) VALUES (?, ?, ?, ?)",
@@ -344,3 +486,12 @@ def active_contain_host(dst_ip: str, pid: int | None = None):
         actions.append(f"OS firewall notice: Run BLOCK_C2_FIREWALL.bat as Admin if OS blocked netsh call ({str(e)[:60]})")
 
     return {"status": "completed", "actions": actions, "blocked_ip": dst_ip}
+
+@app.get("/api/v1/analyze-url", dependencies=[Depends(verify_token)])
+async def analyze_suspicious_url(target: str, detonate: bool = False):
+    if is_private_or_internal_target(target):
+        raise HTTPException(status_code=400, detail="Refusing to analyze private/internal address")
+    urlhaus_hit = lookup_urlhaus_local(target)
+    urlscan_data = await analyze_with_urlscan(target, explicit_user_detonate=detonate)
+    combined_risk = 100 if urlhaus_hit else urlscan_data.get("verdict_score", 0)
+    return {"target": target, "combined_risk_score": combined_risk, "urlhaus": urlhaus_hit, "urlscan": urlscan_data}

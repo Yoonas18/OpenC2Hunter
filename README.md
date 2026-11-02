@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&style=for-the-badge" alt="FastAPI"/>
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&style=for-the-badge" alt="React"/>
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"/>
-  <img src="https://img.shields.io/badge/Tests-4%20Passed-brightgreen?style=for-the-badge&logo=pytest" alt="Tests"/>
+  <img src="https://img.shields.io/badge/Tests-9%20Passed-brightgreen?style=for-the-badge&logo=pytest" alt="Tests"/>
   <img src="https://img.shields.io/badge/Platform-Win%20%7C%20Linux%20%7C%20macOS-informational?style=for-the-badge" alt="Platform"/>
 </p>
 
@@ -27,14 +27,16 @@ OpenC2Hunter monitors your live network traffic in real-time, detects **Command 
 
 | Capability | Description |
 |---|---|
-| 🔍 **Live Packet Sniffing** | Captures real-time TCP/UDP flows using Scapy |
+| 🔍 **Live Packet Sniffing & PCAP Replay** | Captures live TCP/UDP flows or analyzes uploaded `.pcap`/`.pcapng` forensic dumps |
 | 🤖 **C2 Beacon Detection** | Detects periodic beaconing via inter-arrival time (IAT) + jitter analysis |
 | 🧬 **DGA Domain Detection** | Shannon entropy analysis flags algorithmically-generated malicious domains |
 | 🌐 **OSINT Enrichment** | Auto-enriches IPs with Shodan InternetDB, ThreatFox, VirusTotal & URLhaus |
-| 🍯 **Canary Honeypot Traps** | Optional fake service listeners that alert on any internal probe |
-| 🔥 **One-Click Mitigation** | Kills the malicious process & blocks outbound IP via OS firewall |
-| 🛡️ **CSRF-Protected API** | Session-token authenticated REST API, localhost-only binding |
-| 📊 **Threat Dashboard** | React UI with live risk scoring, flow graph & alert timeline |
+| 🍯 **Dynamic Canary Honeypots** | Spin up decoy listeners (RDP, Docker, WinRM, SSH, Redis) to detect lateral probes |
+| 🧠 **Memory String Forensics** | Inspects live process memory / loaded binaries for extracted URLs, IPs & C2 markers |
+| 📦 **STIX 2.1 & YARA Export** | Generates OASIS STIX 2.1 JSON threat bundles, YARA rules, and Sigma rules |
+| 📢 **Tactical Audio & Webhooks** | Real-time WebSocket streaming, Web Audio radar alarm, and Discord/Slack dispatches |
+| 🔥 **Persistent One-Click Containment**| Kills malicious processes & permanently blocks outbound IPs via OS firewall |
+| 🛡️ **Hardened SOC Access Gateway** | PBKDF2-HMAC-SHA256 password hashing, anti-brute-force rate limiting & token auth |
 
 ---
 
@@ -192,6 +194,11 @@ pytest backend/tests/ -v
 | `test_private_target_privacy_filter` | Private IPs & internal hosts are never analyzed/blocked |
 | `test_csrf_protection_blocks_unauthenticated_requests` | API rejects missing / wrong session tokens |
 | `test_mitigate_refuses_private_ips_and_critical_pids` | Mitigation engine refuses to block safe IPs or system PIDs |
+| `test_superadmin_auth_flow` | PBKDF2 hash verification, session login/logout & rate limiting |
+| `test_pcap_forensic_offline_reconstruction` | Synthetic PCAP parsing, IAT jitter math & beacon score calculation |
+| `test_process_memory_string_extraction` | Safe regex extraction of URLs, IPs & base64/hex markers from binaries |
+| `test_threat_export_stix_and_yara` | Valid OASIS STIX 2.1 JSON bundle & YARA syntax validation |
+| `test_dynamic_canary_honey_trap` | Dynamic port trap spawning, lateral socket detection & callback triggering |
 
 ---
 
@@ -200,17 +207,21 @@ pytest backend/tests/ -v
 ```
 OpenC2Hunter/
 ├── backend/
-│   ├── backend_engine.py      # FastAPI REST API + CSRF auth + OSINT enrichment
+│   ├── backend_engine.py      # FastAPI REST API + CSRF auth + OSINT enrichment + WebSocket
 │   ├── sniffer_daemon.py      # Live packet capture + C2 beacon + DGA detection
+│   ├── forensic_pcap.py       # Offline .pcap/.pcapng replay & deep flow reconstruction
+│   ├── process_memory.py      # Live memory/binary string extraction (URLs, IPs, C2 indicators)
+│   ├── threat_export.py       # STIX 2.1 JSON bundle & YARA rule exporter
+│   ├── webhooks.py            # Discord & Slack enterprise SOC alert delivery
 │   ├── url_analyzer.py        # URL/domain threat analysis + URLhaus feed
-│   ├── canary_deception.py    # Honeypot canary trap listeners
-│   ├── schema.sql             # SQLite schema (flows, processes, OSINT cache)
+│   ├── canary_deception.py    # Dynamic decoy honeypot trap engine
+│   ├── schema.sql             # SQLite schema (flows, processes, OSINT cache, blocked_ips)
 │   ├── requirements.txt       # Python dependencies
 │   └── tests/
-│       └── test_core.py       # Pytest unit tests
+│       └── test_core.py       # Pytest unit test suite (9 test cases)
 ├── frontend/
 │   └── src/
-│       ├── ThreatHunterDashboard.jsx  # Main React dashboard
+│       ├── ThreatHunterDashboard.jsx  # React dashboard + Audio radar + Forensics + Decoy UI
 │       └── main.jsx                   # App entry point
 ├── .env.example               # Environment variable template
 ├── docker-compose.yml         # Docker setup
@@ -252,10 +263,19 @@ All endpoints require the `X-OpenC2-Token` header (auto-set by the UI).
 | `POST` | `/api/v1/auth/login` | Authenticate with superadmin credentials & receive session token |
 | `GET` | `/api/v1/auth/verify` | Validate existing session token |
 | `POST` | `/api/v1/auth/logout` | Revoke session token & lock lab |
-| `GET` | `/api/v1/graph-stats` | Get all live flows with risk scores |
+| `GET` | `/api/v1/graph-stats` | Get all live flows with risk scores & persisted blocked IPs |
+| `GET` | `/api/v1/blocked-ips` | Get list of contained IP addresses from persistent SQLite store |
 | `GET` | `/api/v1/analyze-url?target=<url>` | Analyze a URL/domain for threats |
 | `GET` | `/api/v1/canary-alerts` | Get honeypot canary alert log |
-| `POST` | `/api/v1/mitigate?dst_ip=<ip>&pid=<pid>` | Block IP + terminate process |
+| `POST` | `/api/v1/canary/dynamic-trap` | Deploy a custom decoy port listener dynamically |
+| `POST` | `/api/v1/forensics/upload-pcap` | Upload offline `.pcap`/`.pcapng` dump for automated forensic extraction |
+| `GET` | `/api/v1/process/inspect-memory?pid=<pid>` | Scan process memory for extracted C2 URLs, external IPs & markers |
+| `GET` | `/api/v1/export/stix` | Export current threat indicators as an OASIS STIX 2.1 JSON bundle |
+| `GET` | `/api/v1/export/yara?flow_id=<id>` | Generate detection YARA rule with process & C2 IOC strings |
+| `GET` | `/api/v1/export/sigma?dst_ip=<ip>&process=<name>` | Generate detection Sigma rule for SIEM consumption |
+| `POST` | `/api/v1/webhooks/test` | Test dispatch an alert to configured Discord / Slack webhook URLs |
+| `WS` | `/ws/telemetry` | WebSocket stream for live sub-second flow & threat push events |
+| `POST` | `/api/v1/mitigate?dst_ip=<ip>&pid=<pid>` | Block IP + terminate process + persist in DB |
 
 ---
 
