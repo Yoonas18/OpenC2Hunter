@@ -153,3 +153,4 @@ def get_mitre_summary(flows: list[dict[str, Any]], canary_alerts: list[dict[str,
         "total_active_techniques": sum(1 for c in technique_counts.values() if c > 0),
         "total_detections": sum(technique_counts.values()),
     }
+

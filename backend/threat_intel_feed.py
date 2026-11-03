@@ -133,3 +133,4 @@ async def sync_external_feeds(db_path: str = "telemetry.db") -> dict[str, Any]:
         logger.info(f"External feed sync skipped or offline: {e}")
 
     return {"success": False, "detail": "Feeds offline or unreachable; active baseline cache preserved."}
+

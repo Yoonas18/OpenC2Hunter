@@ -196,3 +196,4 @@ def toggle_host_quarantine(enable: bool) -> dict[str, Any]:
             message = str(e)
 
     return {"quarantine_active": enable, "success": success, "detail": message}
+

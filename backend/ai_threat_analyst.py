@@ -107,3 +107,4 @@ def analyze_threat_context(flow: dict[str, Any], memory_strings: dict[str, Any] 
             "dns_query": dns_query,
         },
     }
+
