@@ -9,9 +9,10 @@ test_db_path = Path(__file__).resolve().parent / "test_temp.db"
 os.environ["OPENC2_SESSION_TOKEN"] = "test_secret_token_123"
 os.environ["DB_PATH"] = str(test_db_path)
 
-from backend_engine import app, init_db_schema
-from sniffer_daemon import analyze_dga_domain
-from url_analyzer import is_private_or_internal_target
+from backend_engine import app, init_db_schema  # noqa: E402
+
+from sniffer_daemon import analyze_dga_domain  # noqa: E402
+from url_analyzer import is_private_or_internal_target  # noqa: E402
 
 init_db_schema()
 client = TestClient(app)

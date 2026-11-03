@@ -1,0 +1,27 @@
+# OpenC2Hunter Ruff Linter Configuration
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",   # Line length handled softly
+    "B008",   # Do not perform function call in argument defaults (FastAPI Depends/File)
+    "BLE001", # Blind exception catch (necessary for network listeners & forensics)
+    "S110",   # try-except-pass
+]
+
+[lint.isort]
+known-first-party = [
+    "ai_threat_analyst",
+    "canary_deception",
+    "forensic_pcap",
+    "incident_response",
+    "mitre_attack",
+    "process_memory",
+    "sniffer_daemon",
+    "threat_export",
+    "threat_intel_feed",
+    "url_analyzer",
+    "webhooks",
+]

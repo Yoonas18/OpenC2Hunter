@@ -15,13 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import psutil
-from ai_threat_analyst import analyze_threat_context
-from canary_deception import (
-    add_custom_canary,
-    get_active_traps_summary,
-    register_alert_callback,
-    start_canary_listeners,
-)
 from fastapi import (
     Depends,
     FastAPI,
@@ -34,11 +27,19 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from pydantic import BaseModel
+
+from ai_threat_analyst import analyze_threat_context
+from canary_deception import (
+    add_custom_canary,
+    get_active_traps_summary,
+    register_alert_callback,
+    start_canary_listeners,
+)
 from forensic_pcap import parse_pcap_forensics
 from incident_response import generate_triage_bundle, toggle_host_quarantine
 from mitre_attack import get_mitre_summary, map_flow_to_mitre
 from process_memory import inspect_process_memory_and_binary
-from pydantic import BaseModel
 from threat_export import generate_stix21_bundle, generate_yara_rule
 from threat_intel_feed import check_intel_indicator, init_intel_table, sync_external_feeds
 from url_analyzer import (
@@ -76,7 +77,7 @@ PROTECTED_PROCESS_NAMES = {
     "services.exe", "lsass.exe", "svchost.exe", "explorer.exe", "msmpeng.exe",
     "systemd", "init", "launchd", "kernel_task", "sshd", "dockerd", "python", "python3", "python.exe"
 }
-SAFE_INFRA_IPS = {"127.0.0.1", "0.0.0.0", "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9"}
+SAFE_INFRA_IPS = {"127.0.0.1", "0.0.0.0", "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9"}  # nosec B104
 
 def hash_password(password: str, salt: bytes | None = None) -> str:
     """Derives a PBKDF2-HMAC-SHA256 password hash for hardened credential storage."""
@@ -128,7 +129,7 @@ ws_manager = ConnectionManager()
 async def on_canary_alert_dispatched(alert_event: dict):
     # Broadcast to live UI via WebSockets
     await ws_manager.broadcast("canary_alert", alert_event)
-    
+
     # Auto-dispatch webhooks if configured
     threat_info = {
         "title": f"Canary Trap Tripped: {alert_event.get('service')}",
@@ -316,7 +317,7 @@ def get_dashboard_graph_and_stats():
         if d["is_dga"]:
             behavioral_score = max(behavioral_score, 85)
         d["intel"] = json.loads(d["source_hits"]) if d.get("source_hits") else {}
-        
+
         # Check offline/synced threat intelligence cache
         feed_hit = check_intel_indicator(d["dst_ip"], db_path=DB_PATH)
         if feed_hit:
@@ -528,7 +529,7 @@ def get_mitre_matrix_endpoint():
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("""
-        SELECT f.*, p.process_name 
+        SELECT f.*, p.process_name
         FROM aggregated_flows f
         LEFT JOIN processes p ON f.process_sha256 = p.sha256
         ORDER BY f.last_seen DESC LIMIT 100

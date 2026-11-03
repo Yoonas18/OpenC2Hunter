@@ -6,6 +6,7 @@ from collections import deque
 from pathlib import Path
 
 from scapy.all import DNS, DNSQR, IP, TCP, UDP, Raw, rdpcap
+
 from sniffer_daemon import analyze_dga_domain
 
 
@@ -34,18 +35,16 @@ def parse_pcap_forensics(file_bytes: bytes, db_path: str = "telemetry.db") -> di
         pkt_time = float(pkt.time)
 
         proto = "OTHER"
-        sport, dport = 0, 0
+        dport = 0
         is_new_session = False
 
         if pkt.haslayer(TCP):
             proto = "TCP"
-            sport = int(pkt[TCP].sport)
             dport = int(pkt[TCP].dport)
             flags = int(pkt[TCP].flags)
             is_new_session = bool((flags & 0x02) and not (flags & 0x10))
         elif pkt.haslayer(UDP):
             proto = "UDP"
-            sport = int(pkt[UDP].sport)
             dport = int(pkt[UDP].dport)
 
         flow_key = f"PCAP|{src_ip}->{dst_ip}:{dport}|{proto}"

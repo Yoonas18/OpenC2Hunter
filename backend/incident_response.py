@@ -37,7 +37,7 @@ def generate_triage_bundle(
 
     pid = flow_data.get("pid", 0)
     process_name = flow_data.get("process_name", "Unknown")
-    dst_ip = flow_data.get("dst_ip", "0.0.0.0")
+    dst_ip = flow_data.get("dst_ip", "0.0.0.0")  # nosec B104
     dst_port = flow_data.get("dst_port", 0)
     risk_score = flow_data.get("risk_score", 0)
     binary_path = flow_data.get("binary_path", "N/A")
@@ -49,8 +49,8 @@ def generate_triage_bundle(
 
     # 1. Generate Executive Incident Response Report Markdown
     report_md = f"""# 🚨 OPENC2HUNTER FORENSIC INCIDENT REPORT
-**Generated:** {now_str}  
-**Classification:** TLP:AMBER | STRICT DEFENSIVE DISSEMINATION  
+**Generated:** {now_str}
+**Classification:** TLP:AMBER | STRICT DEFENSIVE DISSEMINATION
 **Incident Status:** {'CONTAINED / BLOCKED' if (blocked_ips and dst_ip in blocked_ips) else 'ACTIVE THREAT'}
 
 ---
@@ -160,12 +160,13 @@ def toggle_host_quarantine(enable: bool) -> dict[str, Any]:
     if os_type == "Windows":
         if enable:
             # Block all outbound TCP traffic except loopback and private ranges
-            cmd = (
-                f'netsh advfirewall firewall add rule name="{rule_name}" dir=out action=block '
-                f'protocol=TCP remoteip=0.0.0.0/1,128.0.0.0/1'
-            )
+            cmd = [
+                "netsh", "advfirewall", "firewall", "add", "rule",
+                f"name={rule_name}", "dir=out", "action=block",
+                "protocol=TCP", "remoteip=0.0.0.0/1,128.0.0.0/1"
+            ]
             try:
-                res = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+                res = subprocess.run(cmd, shell=False, capture_output=True, text=True, check=False)
                 if res.returncode == 0:
                     success = True
                     message = "Host successfully isolated via Windows Defender Firewall. External C2 blocked."
@@ -175,9 +176,9 @@ def toggle_host_quarantine(enable: bool) -> dict[str, Any]:
             except Exception as e:
                 message = str(e)
         else:
-            cmd = f'netsh advfirewall firewall delete rule name="{rule_name}"'
+            cmd = ["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule_name}"]
             try:
-                subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+                subprocess.run(cmd, shell=False, capture_output=True, text=True, check=False)
                 success = True
                 message = "Host quarantine lifted. Normal outbound routing restored."
             except Exception as e:
@@ -185,11 +186,19 @@ def toggle_host_quarantine(enable: bool) -> dict[str, Any]:
     else:
         # Linux iptables fallback
         if enable:
-            cmd = f"iptables -I OUTPUT -p tcp -m multiport --dports 80,443,8443,8080 -j DROP -m comment --comment '{rule_name}'"
+            cmd = [
+                "iptables", "-I", "OUTPUT", "-p", "tcp", "-m", "multiport",
+                "--dports", "80,443,8443,8080", "-j", "DROP", "-m", "comment",
+                "--comment", rule_name
+            ]
         else:
-            cmd = f"iptables -D OUTPUT -p tcp -m multiport --dports 80,443,8443,8080 -j DROP -m comment --comment '{rule_name}'"
+            cmd = [
+                "iptables", "-D", "OUTPUT", "-p", "tcp", "-m", "multiport",
+                "--dports", "80,443,8443,8080", "-j", "DROP", "-m", "comment",
+                "--comment", rule_name
+            ]
         try:
-            res = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+            res = subprocess.run(cmd, shell=False, capture_output=True, text=True, check=False)
             success = res.returncode == 0
             message = "Quarantine applied via iptables" if enable else "Quarantine removed via iptables"
         except Exception as e:

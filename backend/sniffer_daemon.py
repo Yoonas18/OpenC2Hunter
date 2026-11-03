@@ -88,7 +88,7 @@ def refresh_socket_pid_map():
                         proc_id, is_prot = f"PROTECTED:PID_{pid}", 1
 
                     new_map[(l_ip, l_port)] = (pid, name, exe, proc_id, is_prot)
-                    new_map[("0.0.0.0", l_port)] = (pid, name, exe, proc_id, is_prot)
+                    new_map[("0.0.0.0", l_port)] = (pid, name, exe, proc_id, is_prot)  # nosec B104
         except Exception:
             pass
         SOCKET_PID_CACHE.update(new_map)
@@ -125,7 +125,7 @@ def packet_callback(pkt):
 
     pid_info = SOCKET_PID_CACHE.get(
         (local_ip, local_port),
-        SOCKET_PID_CACHE.get(("0.0.0.0", local_port), (0, "Kernel/Unmapped", "N/A", f"UNMAPPED:{local_port}", 1))
+        SOCKET_PID_CACHE.get(("0.0.0.0", local_port), (0, "Kernel/Unmapped", "N/A", f"UNMAPPED:{local_port}", 1))  # nosec B104
     )
     pid, proc_name, exe_path, proc_id, is_protected = pid_info
 

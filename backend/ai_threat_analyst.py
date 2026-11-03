@@ -16,7 +16,7 @@ def analyze_threat_context(flow: dict[str, Any], memory_strings: dict[str, Any] 
     and containment playbook.
     """
     proc = flow.get("process_name", "Unknown")
-    dst_ip = flow.get("dst_ip", "0.0.0.0")
+    dst_ip = flow.get("dst_ip", "0.0.0.0")  # nosec B104
     dst_port = flow.get("dst_port", 0)
     jitter = flow.get("jitter_pct", 100.0)
     entropy = flow.get("entropy", 0.0)

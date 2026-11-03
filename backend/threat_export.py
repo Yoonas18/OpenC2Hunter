@@ -9,13 +9,13 @@ def generate_stix21_bundle(flow: dict) -> dict:
     """
     bundle_id = f"bundle--{uuid.uuid4()}"
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-    
+
     indicator_id = f"indicator--{uuid.uuid4()}"
     infra_id = f"infrastructure--{uuid.uuid4()}"
     malware_id = f"malware--{uuid.uuid4()}"
     relationship_id = f"relationship--{uuid.uuid4()}"
 
-    dst_ip = flow.get("dst_ip", "0.0.0.0")
+    dst_ip = flow.get("dst_ip", "0.0.0.0")  # nosec B104
     dst_port = flow.get("dst_port", 443)
     proc_name = flow.get("process_name", "unknown")
     intel_malware = flow.get("intel", {}).get("threatfox_malware") or "Suspected C2 Implant"

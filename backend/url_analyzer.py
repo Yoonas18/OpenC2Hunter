@@ -34,7 +34,7 @@ def sync_urlhaus_bulk_feed():
             with httpx.Client(timeout=20.0) as client:
                 resp = client.get(URLHAUS_CSV_URL)
                 if resp.status_code == 200:
-                    lines = [l for l in resp.text.splitlines() if not l.startswith("#") and l.strip()]
+                    lines = [ln for ln in resp.text.splitlines() if not ln.startswith("#") and ln.strip()]
                     reader = csv.reader(io.StringIO("\n".join(lines)))
                     batch = []
                     for row in reader:

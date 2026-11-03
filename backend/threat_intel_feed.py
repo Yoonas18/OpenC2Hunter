@@ -48,7 +48,7 @@ def init_intel_table(db_path: str = "telemetry.db") -> None:
             for b in CURATED_C2_BASELINES:
                 cur.execute(
                     """
-                    INSERT OR REPLACE INTO threat_intel_cache 
+                    INSERT OR REPLACE INTO threat_intel_cache
                     (indicator, indicator_type, threat_family, confidence, source, last_updated)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
