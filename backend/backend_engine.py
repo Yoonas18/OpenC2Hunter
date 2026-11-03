@@ -12,8 +12,10 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import psutil
+from ai_threat_analyst import analyze_threat_context
 from canary_deception import (
     add_custom_canary,
     get_active_traps_summary,
@@ -31,10 +33,14 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from forensic_pcap import parse_pcap_forensics
+from incident_response import generate_triage_bundle, toggle_host_quarantine
+from mitre_attack import get_mitre_summary, map_flow_to_mitre
 from process_memory import inspect_process_memory_and_binary
 from pydantic import BaseModel
 from threat_export import generate_stix21_bundle, generate_yara_rule
+from threat_intel_feed import check_intel_indicator, init_intel_table, sync_external_feeds
 from url_analyzer import (
     analyze_with_urlscan,
     is_private_or_internal_target,
@@ -149,7 +155,9 @@ def init_db_schema():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db_schema()
+    init_intel_table(DB_PATH)
     threading.Thread(target=sync_urlhaus_bulk_feed, daemon=True).start()
+    asyncio.create_task(sync_external_feeds(DB_PATH))
     if ENABLE_CANARIES:
         asyncio.create_task(start_canary_listeners())
     yield
@@ -176,6 +184,15 @@ class CanaryTrapRequest(BaseModel):
 class WebhookTestRequest(BaseModel):
     webhook_url: str
     platform: str = "discord"
+
+class QuarantineRequest(BaseModel):
+    enable: bool
+
+class AIInvestigateRequest(BaseModel):
+    flow: dict[str, Any]
+
+class TriageBundleRequest(BaseModel):
+    flow: dict[str, Any]
 
 FAILED_LOGINS = {}
 
@@ -298,8 +315,16 @@ def get_dashboard_graph_and_stats():
             behavioral_score = max(behavioral_score, 80)
         if d["is_dga"]:
             behavioral_score = max(behavioral_score, 85)
-        d["risk_score"] = 0 if is_blocked else min(100, behavioral_score)
         d["intel"] = json.loads(d["source_hits"]) if d.get("source_hits") else {}
+        
+        # Check offline/synced threat intelligence cache
+        feed_hit = check_intel_indicator(d["dst_ip"], db_path=DB_PATH)
+        if feed_hit:
+            d["intel"]["threat_feed"] = feed_hit["threat_family"]
+            behavioral_score = max(behavioral_score, feed_hit["confidence"])
+
+        d["risk_score"] = 0 if is_blocked else min(100, behavioral_score)
+        d["mitre_techniques"] = map_flow_to_mitre(d)
         rows.append(d)
     conn.close()
     return {"flows": rows, "blocked_ips": blocked_ips}
@@ -495,3 +520,81 @@ async def analyze_suspicious_url(target: str, detonate: bool = False):
     urlscan_data = await analyze_with_urlscan(target, explicit_user_detonate=detonate)
     combined_risk = 100 if urlhaus_hit else urlscan_data.get("verdict_score", 0)
     return {"target": target, "combined_risk_score": combined_risk, "urlhaus": urlhaus_hit, "urlscan": urlscan_data}
+
+# --- MITRE ATT&CK Matrix Navigator Endpoint ---
+@app.get("/api/v1/mitre/matrix", dependencies=[Depends(verify_token)])
+def get_mitre_matrix_endpoint():
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT f.*, p.process_name 
+        FROM aggregated_flows f
+        LEFT JOIN processes p ON f.process_sha256 = p.sha256
+        ORDER BY f.last_seen DESC LIMIT 100
+    """)
+    flows = [dict(r) for r in cur.fetchall()]
+    try:
+        cur.execute("SELECT * FROM canary_alerts ORDER BY id DESC LIMIT 50")
+        canaries = [dict(r) for r in cur.fetchall()]
+    except Exception:
+        canaries = []
+    conn.close()
+
+    return get_mitre_summary(flows, canaries)
+
+# --- Incident Response Triage Bundle Download ---
+@app.post("/api/v1/incident/triage-bundle", dependencies=[Depends(verify_token)])
+def download_incident_triage_bundle(req: TriageBundleRequest):
+    flow = req.flow
+    pid = flow.get("pid", 0)
+    mem_data = None
+    if pid > 0:
+        mem_data = inspect_process_memory_and_binary(pid)
+
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT ip FROM blocked_ips")
+        blocked_ips = [r[0] for r in cur.fetchall()]
+    except Exception:
+        blocked_ips = []
+    conn.close()
+
+    zip_bytes = generate_triage_bundle(flow, mem_data, blocked_ips)
+    filename = f"triage_bundle_{flow.get('dst_ip', 'threat')}_{int(time.time())}.zip"
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+# --- Host Isolation / Emergency Quarantine ---
+@app.post("/api/v1/incident/quarantine", dependencies=[Depends(verify_token)])
+def emergency_host_quarantine(req: QuarantineRequest):
+    res = toggle_host_quarantine(req.enable)
+    # Broadcast event to frontend
+    asyncio.create_task(ws_manager.broadcast("quarantine_status", res))
+    return res
+
+# --- Autonomous AI Threat Analyst Copilot ---
+@app.post("/api/v1/ai/investigate", dependencies=[Depends(verify_token)])
+def ai_investigate_flow(req: AIInvestigateRequest):
+    flow = req.flow
+    pid = flow.get("pid", 0)
+    mem_data = None
+    if pid > 0:
+        mem_data = inspect_process_memory_and_binary(pid)
+    analysis = analyze_threat_context(flow, mem_data)
+    return analysis
+
+# --- Live Threat Intel Cache Sync & Query ---
+@app.post("/api/v1/threat-intel/sync", dependencies=[Depends(verify_token)])
+async def sync_threat_feeds_endpoint():
+    res = await sync_external_feeds(DB_PATH)
+    return res
+
+@app.get("/api/v1/threat-intel/check", dependencies=[Depends(verify_token)])
+def query_threat_intel(indicator: str):
+    hit = check_intel_indicator(indicator, DB_PATH)
+    return hit or {"matched": False, "indicator": indicator}

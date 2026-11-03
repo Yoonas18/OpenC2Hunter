@@ -87,3 +87,13 @@ CREATE TABLE IF NOT EXISTS canary_alerts (
     threat_classification TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_canary_attacker ON canary_alerts(attacker_ip, timestamp);
+
+CREATE TABLE IF NOT EXISTS threat_intel_cache (
+    indicator TEXT PRIMARY KEY,
+    indicator_type TEXT NOT NULL,
+    threat_family TEXT NOT NULL,
+    confidence INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    last_updated REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_threat_intel_indicator ON threat_intel_cache(indicator);

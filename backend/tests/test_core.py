@@ -117,3 +117,69 @@ def test_process_memory_inspector():
     data = res.json()
     assert "strings_extracted_count" in data
     assert data["pid"] == os.getpid()
+
+def test_mitre_attack_mapping_and_matrix():
+    from mitre_attack import get_mitre_summary, map_flow_to_mitre
+    test_flow = {
+        "dst_ip": "185.220.101.45",
+        "dst_port": 8443,
+        "jitter_pct": 4.8,
+        "entropy": 4.12,
+        "process_name": "python3.exe",
+        "bytes_out": 600000,
+    }
+    techniques = map_flow_to_mitre(test_flow)
+    tids = [t["id"] for t in techniques]
+    assert "T1071.001" in tids  # Web protocols
+    assert "T1568.002" in tids  # DGA
+    assert "T1059" in tids      # Scripting
+    assert "T1041" in tids      # Exfiltration
+
+    summary = get_mitre_summary([test_flow], [{"service": "SSH", "port": 2222}])
+    assert summary["total_active_techniques"] >= 4
+    assert "Command and Control" in summary["tactics"]
+
+def test_incident_response_triage_bundle():
+    headers = {"X-OpenC2-Token": "test_secret_token_123"}
+    flow_payload = {
+        "dst_ip": "185.220.101.45",
+        "dst_port": 8443,
+        "pid": os.getpid(),
+        "process_name": "python.exe",
+        "risk_score": 95,
+        "jitter_pct": 4.8,
+        "entropy": 4.12,
+    }
+    res = client.post("/api/v1/incident/triage-bundle", json={"flow": flow_payload}, headers=headers)
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/zip"
+    assert len(res.content) > 500  # Non-empty ZIP archive
+
+def test_ai_threat_analyst_copilot():
+    headers = {"X-OpenC2-Token": "test_secret_token_123"}
+    flow_payload = {
+        "dst_ip": "185.220.101.45",
+        "dst_port": 8443,
+        "pid": 4812,
+        "process_name": "python3.exe",
+        "risk_score": 95,
+        "jitter_pct": 4.8,
+        "entropy": 4.12,
+        "threatfox_malware": "Sliver C2 / Autonomous Agent",
+        "dns_query": "x9k2m7p4q8z1w3.c2-routing.top",
+    }
+    res = client.post("/api/v1/ai/investigate", json={"flow": flow_payload}, headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "COMPLETED"
+    assert "Sliver" in data["attribution_hypothesis"]
+    assert "IMMEDIATE_ACTION_REQUIRED" == data["urgency"]
+    assert len(data["recommended_actions"]) >= 3
+
+def test_threat_intel_cache_offline_lookup():
+    from threat_intel_feed import check_intel_indicator, init_intel_table
+    init_intel_table(str(test_db_path))
+    hit = check_intel_indicator("185.220.101.45", str(test_db_path))
+    assert hit is not None
+    assert hit["matched"] is True
+    assert "Sliver" in hit["threat_family"]

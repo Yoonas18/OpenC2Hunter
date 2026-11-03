@@ -13,7 +13,7 @@
   <img src="https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&style=for-the-badge" alt="FastAPI"/>
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&style=for-the-badge" alt="React"/>
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License"/>
-  <img src="https://img.shields.io/badge/Tests-9%20Passed-brightgreen?style=for-the-badge&logo=pytest" alt="Tests"/>
+  <img src="https://img.shields.io/badge/Tests-13%20Passed-brightgreen?style=for-the-badge&logo=pytest" alt="Tests"/>
   <img src="https://img.shields.io/badge/Platform-Win%20%7C%20Linux%20%7C%20macOS-informational?style=for-the-badge" alt="Platform"/>
 </p>
 
@@ -27,10 +27,14 @@ OpenC2Hunter monitors your live network traffic in real-time, detects **Command 
 
 | Capability | Description |
 |---|---|
-| 🔍 **Live Packet Sniffing & PCAP Replay** | Captures live TCP/UDP flows or analyzes uploaded `.pcap`/`.pcapng` forensic dumps |
+| 🔍 **Live Sniffing & PCAP Replay** | Captures live TCP/UDP flows or analyzes uploaded `.pcap`/`.pcapng` forensic dumps |
 | 🤖 **C2 Beacon Detection** | Detects periodic beaconing via inter-arrival time (IAT) + jitter analysis |
 | 🧬 **DGA Domain Detection** | Shannon entropy analysis flags algorithmically-generated malicious domains |
-| 🌐 **OSINT Enrichment** | Auto-enriches IPs with Shodan InternetDB, ThreatFox, VirusTotal & URLhaus |
+| 🗺️ **MITRE ATT&CK Enterprise Matrix** | Maps telemetry to 8 core ATT&CK techniques with an interactive SOC matrix |
+| 🧠 **AI Threat Analyst Copilot** | Synthesizes contextual adversary attribution, kill chain phases & playbook |
+| 📦 **Forensic Triage Bundles** | One-click ZIP extraction of executive report, IOC JSON, sockets CSV & memory strings |
+| 🛡️ **Host Quarantine Isolation** | Emergency network isolation cutting off external C2 while keeping local SOC links |
+| 🔄 **Threat Intel Feed Auto-Sync** | Sub-millisecond SQLite cache syncing known active C2 IPs from Abuse.ch Feodo & SSLBL |
 | 🍯 **Dynamic Canary Honeypots** | Spin up decoy listeners (RDP, Docker, WinRM, SSH, Redis) to detect lateral probes |
 | 🧠 **Memory String Forensics** | Inspects live process memory / loaded binaries for extracted URLs, IPs & C2 markers |
 | 📦 **STIX 2.1 & YARA Export** | Generates OASIS STIX 2.1 JSON threat bundles, YARA rules, and Sigma rules |
@@ -195,10 +199,14 @@ pytest backend/tests/ -v
 | `test_csrf_protection_blocks_unauthenticated_requests` | API rejects missing / wrong session tokens |
 | `test_mitigate_refuses_private_ips_and_critical_pids` | Mitigation engine refuses to block safe IPs or system PIDs |
 | `test_superadmin_auth_flow` | PBKDF2 hash verification, session login/logout & rate limiting |
-| `test_pcap_forensic_offline_reconstruction` | Synthetic PCAP parsing, IAT jitter math & beacon score calculation |
-| `test_process_memory_string_extraction` | Safe regex extraction of URLs, IPs & base64/hex markers from binaries |
-| `test_threat_export_stix_and_yara` | Valid OASIS STIX 2.1 JSON bundle & YARA syntax validation |
-| `test_dynamic_canary_honey_trap` | Dynamic port trap spawning, lateral socket detection & callback triggering |
+| `test_pbkdf2_password_hashing` | Secure PBKDF2 derivative key calculation and verification |
+| `test_stix_and_yara_export` | Valid OASIS STIX 2.1 JSON bundle & YARA syntax validation |
+| `test_canary_traps_management` | Decoy honeypot listeners configuration & port management |
+| `test_process_memory_inspector` | Safe regex extraction of URLs, IPs & base64/hex markers from binaries |
+| `test_mitre_attack_mapping_and_matrix` | Validates mapping of live flows to ATT&CK techniques & tactics summary |
+| `test_incident_response_triage_bundle` | Generates verified .zip triage bundle with Markdown report & CSV sockets |
+| `test_ai_threat_analyst_copilot` | Contextual LLM/heuristic reasoning, attribution hypothesis & playbooks |
+| `test_threat_intel_cache_offline_lookup` | Sub-millisecond SQLite query against Feodo/curated threat intelligence |
 
 ---
 
@@ -210,18 +218,22 @@ OpenC2Hunter/
 │   ├── backend_engine.py      # FastAPI REST API + CSRF auth + OSINT enrichment + WebSocket
 │   ├── sniffer_daemon.py      # Live packet capture + C2 beacon + DGA detection
 │   ├── forensic_pcap.py       # Offline .pcap/.pcapng replay & deep flow reconstruction
+│   ├── mitre_attack.py        # MITRE ATT&CK Matrix mapping & TTP aggregator
+│   ├── incident_response.py   # Forensic triage bundle (.zip) builder & host isolation
+│   ├── ai_threat_analyst.py   # Autonomous SOC AI copilot & heuristic reasoning engine
+│   ├── threat_intel_feed.py   # Feodo Tracker & SSLBL SQLite feed sync and lookup
 │   ├── process_memory.py      # Live memory/binary string extraction (URLs, IPs, C2 indicators)
 │   ├── threat_export.py       # STIX 2.1 JSON bundle & YARA rule exporter
 │   ├── webhooks.py            # Discord & Slack enterprise SOC alert delivery
 │   ├── url_analyzer.py        # URL/domain threat analysis + URLhaus feed
 │   ├── canary_deception.py    # Dynamic decoy honeypot trap engine
-│   ├── schema.sql             # SQLite schema (flows, processes, OSINT cache, blocked_ips)
+│   ├── schema.sql             # SQLite schema (flows, processes, threat intel, blocked_ips)
 │   ├── requirements.txt       # Python dependencies
 │   └── tests/
-│       └── test_core.py       # Pytest unit test suite (9 test cases)
+│       └── test_core.py       # Pytest unit test suite (13 test cases)
 ├── frontend/
 │   └── src/
-│       ├── ThreatHunterDashboard.jsx  # React dashboard + Audio radar + Forensics + Decoy UI
+│       ├── ThreatHunterDashboard.jsx  # React dashboard + MITRE + AI Copilot + Triage UI
 │       └── main.jsx                   # App entry point
 ├── .env.example               # Environment variable template
 ├── docker-compose.yml         # Docker setup
@@ -267,13 +279,19 @@ All endpoints require the `X-OpenC2-Token` header (auto-set by the UI).
 | `GET` | `/api/v1/blocked-ips` | Get list of contained IP addresses from persistent SQLite store |
 | `GET` | `/api/v1/analyze-url?target=<url>` | Analyze a URL/domain for threats |
 | `GET` | `/api/v1/canary-alerts` | Get honeypot canary alert log |
-| `POST` | `/api/v1/canary/dynamic-trap` | Deploy a custom decoy port listener dynamically |
+| `GET` | `/api/v1/canary/traps` | List all active decoy listeners |
+| `POST` | `/api/v1/canary/add-trap` | Deploy a custom decoy port listener dynamically |
 | `POST` | `/api/v1/forensics/upload-pcap` | Upload offline `.pcap`/`.pcapng` dump for automated forensic extraction |
-| `GET` | `/api/v1/process/inspect-memory?pid=<pid>` | Scan process memory for extracted C2 URLs, external IPs & markers |
+| `GET` | `/api/v1/process-memory-strings?pid=<pid>` | Scan process memory for extracted C2 URLs, external IPs & markers |
 | `GET` | `/api/v1/export/stix` | Export current threat indicators as an OASIS STIX 2.1 JSON bundle |
 | `GET` | `/api/v1/export/yara?flow_id=<id>` | Generate detection YARA rule with process & C2 IOC strings |
-| `GET` | `/api/v1/export/sigma?dst_ip=<ip>&process=<name>` | Generate detection Sigma rule for SIEM consumption |
 | `POST` | `/api/v1/webhooks/test` | Test dispatch an alert to configured Discord / Slack webhook URLs |
+| `GET` | `/api/v1/mitre/matrix` | Aggregated MITRE ATT&CK enterprise coverage and active hits |
+| `POST` | `/api/v1/incident/triage-bundle` | Download full forensic ZIP package (report, JSON IOCs, CSV sockets) |
+| `POST` | `/api/v1/incident/quarantine` | Emergency host isolation (blocks external traffic except SOC links) |
+| `POST` | `/api/v1/ai/investigate` | Autonomous AI Threat Analyst Copilot investigation brief & playbook |
+| `POST` | `/api/v1/threat-intel/sync` | Sync known C2 indicators from Abuse.ch Feodo Tracker & SSLBL |
+| `GET` | `/api/v1/threat-intel/check?indicator=<ip>`| Sub-millisecond local threat intelligence cache query |
 | `WS` | `/ws/telemetry` | WebSocket stream for live sub-second flow & threat push events |
 | `POST` | `/api/v1/mitigate?dst_ip=<ip>&pid=<pid>` | Block IP + terminate process + persist in DB |
 

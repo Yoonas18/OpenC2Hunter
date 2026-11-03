@@ -4,7 +4,8 @@ import {
   ExternalLink, FileCode, CheckCircle2, AlertTriangle,
   User, LogOut, KeyRound, ShieldCheck,
   UploadCloud, Volume2, VolumeX, Bell, Radio,
-  Cpu, Download, Copy, Check, RadioTower, Flame, X, Database
+  Cpu, Download, Copy, Check, RadioTower, Flame, X, Database,
+  Bot, Shield, Archive, RefreshCw, AlertOctagon
 } from "lucide-react";
 
 const API_TOKEN = import.meta.env.VITE_OPENC2_TOKEN || "";
@@ -125,10 +126,29 @@ export default function ThreatHunterDashboard() {
   const [webhookPlatform, setWebhookPlatform] = useState("discord");
   const [webhookStatus, setWebhookStatus] = useState(null);
 
-  const [inspectorTab, setInspectorTab] = useState("telemetry"); // "telemetry" | "memory"
+  const [inspectorTab, setInspectorTab] = useState("telemetry"); // "telemetry" | "memory" | "mitre"
   const [memoryStrings, setMemoryStrings] = useState(null);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
+
+  // MITRE ATT&CK Matrix state
+  const [mitreModalOpen, setMitreModalOpen] = useState(false);
+  const [mitreData, setMitreData] = useState(null);
+  const [mitreLoading, setMitreLoading] = useState(false);
+
+  // AI Threat Analyst Copilot state
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiInvestigation, setAiInvestigation] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+
+  // Triage bundle & Host Quarantine state
+  const [triageDownloading, setTriageDownloading] = useState(false);
+  const [quarantineActive, setQuarantineActive] = useState(false);
+  const [quarantineLoading, setQuarantineLoading] = useState(false);
+
+  // Threat Intel Feed Sync state
+  const [feedSyncing, setFeedSyncing] = useState(false);
+  const [feedResult, setFeedResult] = useState(null);
 
   // Authentication states
   const [authToken, setAuthToken] = useState(() => localStorage.getItem("openc2_auth_token") || API_TOKEN || "");
@@ -512,6 +532,124 @@ export default function ThreatHunterDashboard() {
     URL.revokeObjectURL(url);
   };
 
+  // Open MITRE Matrix
+  const openMitreModal = async () => {
+    setMitreModalOpen(true);
+    setMitreLoading(true);
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/mitre/matrix", {
+        headers: { "X-OpenC2-Token": authToken }
+      });
+      if (res.ok) {
+        setMitreData(await res.json());
+      }
+    } catch {
+      // Fallback
+    } finally {
+      setMitreLoading(false);
+    }
+  };
+
+  // Run AI Threat Analyst Investigation
+  const handleRunAiInvestigate = async (flow) => {
+    setAiModalOpen(true);
+    setAiLoading(true);
+    setAiInvestigation(null);
+    playTacticalAlert(720, 0.2);
+
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/ai/investigate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-OpenC2-Token": authToken },
+        body: JSON.stringify({ flow })
+      });
+      if (res.ok) {
+        setAiInvestigation(await res.json());
+        playTacticalAlert(980, 0.25);
+      }
+    } catch {
+      // Fallback
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // Download Forensic Incident Triage Bundle (.zip)
+  const handleDownloadTriageBundle = async (flow) => {
+    setTriageDownloading(true);
+    playTacticalAlert(640, 0.2);
+
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/incident/triage-bundle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-OpenC2-Token": authToken },
+        body: JSON.stringify({ flow })
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `triage_bundle_${flow.dst_ip}_${Date.now()}.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+        playTacticalAlert(1040, 0.3);
+      } else {
+        alert("Failed to build triage package");
+      }
+    } catch {
+      alert("Error contacting forensic bundle engine");
+    } finally {
+      setTriageDownloading(false);
+    }
+  };
+
+  // Toggle Emergency Host Isolation
+  const handleToggleQuarantine = async () => {
+    setQuarantineLoading(true);
+    const nextState = !quarantineActive;
+    playTacticalAlert(nextState ? 440 : 880, 0.4, "sawtooth");
+
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/incident/quarantine", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-OpenC2-Token": authToken },
+        body: JSON.stringify({ enable: nextState })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setQuarantineActive(nextState);
+        alert(data.detail || (nextState ? "Host Quarantined!" : "Quarantine Removed"));
+      } else {
+        alert("Failed to alter host quarantine rules.");
+      }
+    } catch {
+      alert("Error updating host isolation status");
+    } finally {
+      setQuarantineLoading(false);
+    }
+  };
+
+  // Sync Threat Intelligence Feeds
+  const handleSyncThreatFeeds = async () => {
+    setFeedSyncing(true);
+    setFeedResult(null);
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/threat-intel/sync", {
+        method: "POST",
+        headers: { "X-OpenC2-Token": authToken }
+      });
+      if (res.ok) {
+        setFeedResult(await res.json());
+        playTacticalAlert(880, 0.2);
+      }
+    } catch {
+      setFeedResult({ success: false, detail: "Network error syncing feeds" });
+    } finally {
+      setFeedSyncing(false);
+    }
+  };
+
   if (authChecking) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 font-mono">
@@ -656,6 +794,29 @@ export default function ThreatHunterDashboard() {
 
         {/* Global Action Toolbar */}
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* MITRE ATT&CK Matrix Navigator */}
+          <button
+            onClick={openMitreModal}
+            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-purple-400 border border-purple-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+          >
+            <Database className="w-4 h-4 text-purple-400" /> MITRE ATT&CK
+          </button>
+
+          {/* Emergency Host Quarantine */}
+          <button
+            onClick={handleToggleQuarantine}
+            disabled={quarantineLoading}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition cursor-pointer ${
+              quarantineActive
+                ? "bg-red-600 hover:bg-red-500 text-white border-red-400 shadow-lg shadow-red-500/30 animate-pulse"
+                : "bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700 hover:border-red-500/50"
+            }`}
+            title="Isolate host from external network while maintaining local forensic links"
+          >
+            <Shield className={`w-4 h-4 ${quarantineActive ? "text-white" : "text-amber-400"}`} />
+            <span>{quarantineActive ? "QUARANTINE ACTIVE" : "HOST ISOLATION"}</span>
+          </button>
+
           {/* Forensic PCAP Upload */}
           <button
             onClick={() => setPcapModalOpen(true)}
@@ -876,7 +1037,20 @@ export default function ThreatHunterDashboard() {
               </h3>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => handleRunAiInvestigate(selectedFlow)}
+                className="px-3 py-1.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Bot className="w-3.5 h-3.5 text-purple-400" /> AI Copilot
+              </button>
+              <button
+                onClick={() => handleDownloadTriageBundle(selectedFlow)}
+                disabled={triageDownloading}
+                className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+              >
+                <Archive className="w-3.5 h-3.5 text-emerald-400" /> {triageDownloading ? "Building..." : "Triage Zip"}
+              </button>
               <button
                 onClick={openExportModal}
                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium rounded-lg border border-slate-700 flex items-center gap-1.5 cursor-pointer text-sky-300"
@@ -964,6 +1138,16 @@ export default function ThreatHunterDashboard() {
               >
                 <Cpu className="w-3.5 h-3.5" /> Process Memory & Strings
               </button>
+              <button
+                onClick={() => setInspectorTab("mitre")}
+                className={`px-2.5 py-1 text-xs font-medium rounded-lg transition cursor-pointer flex items-center gap-1.5 ${
+                  inspectorTab === "mitre"
+                    ? "bg-purple-500/20 text-purple-400 border border-purple-500/30 font-semibold"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Database className="w-3.5 h-3.5" /> MITRE TTPs
+              </button>
             </div>
 
             <span className="text-xs font-mono text-slate-400">
@@ -987,7 +1171,7 @@ export default function ThreatHunterDashboard() {
                 </div>
               </div>
             </div>
-          ) : (
+          ) : inspectorTab === "memory" ? (
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-xs space-y-2 overflow-y-auto max-h-40">
               {memoryLoading ? (
                 <div className="flex items-center justify-center py-6 text-slate-400">
@@ -1032,6 +1216,43 @@ export default function ThreatHunterDashboard() {
                   Process memory inspection requires an active local PID. Select a running host process to inspect memory.
                 </div>
               )}
+            </div>
+          ) : (
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-xs space-y-2 overflow-y-auto max-h-40">
+              <span className="text-slate-400 block text-[10px] uppercase font-bold text-purple-400">
+                Mapped MITRE ATT&CK Techniques for Current Flow:
+              </span>
+              {(selectedFlow.mitre_techniques || [
+                { id: "T1071.001", name: "Application Layer Protocol: Web Protocols", tactic: "Command and Control", severity: "HIGH", url: "https://attack.mitre.org/techniques/T1071/001/" },
+                ...(selectedFlow.is_dga ? [{ id: "T1568.002", name: "Dynamic Resolution: DGA", tactic: "Command and Control", severity: "CRITICAL", url: "https://attack.mitre.org/techniques/T1568/002/" }] : []),
+                ...(selectedFlow.process_name?.includes("python") ? [{ id: "T1059", name: "Command and Scripting Interpreter", tactic: "Execution", severity: "HIGH", url: "https://attack.mitre.org/techniques/T1059/" }] : [])
+              ]).map((t, i) => (
+                <div key={i} className="bg-slate-900 border border-slate-800 p-2 rounded flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-purple-400 font-bold">{t.id}</span>
+                      <span className="text-slate-300">{t.name}</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 block">Tactic: {t.tactic}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                      t.severity === "CRITICAL" ? "bg-red-500/20 text-red-400 border border-red-500/30" : "bg-amber-500/20 text-amber-400"
+                    }`}>
+                      {t.severity}
+                    </span>
+                    <a
+                      href={t.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-slate-400 hover:text-white"
+                      title="View MITRE technique definition"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -1322,6 +1543,216 @@ level: critical`}</pre>
                 <span className="text-xs text-red-400 font-mono">❌ Failed to deliver webhook. Check URL.</span>
               )}
             </div>
+
+            {/* Threat Intel Live Feed Auto-Sync */}
+            <div className="border-t border-slate-800 pt-3 mt-3">
+              <span className="text-xs font-mono uppercase text-slate-400 block mb-2 font-bold">Threat Intelligence Feed Sync (Feodo & SSLBL)</span>
+              <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <div>
+                  <span className="text-xs text-slate-300 block">Abuse.ch Feodo Tracker C2 Database</span>
+                  <span className="text-[11px] text-slate-500 font-mono">
+                    {feedResult ? `${feedResult.entries_synced || 0} indicators updated` : "Baseline C2 cache active"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSyncThreatFeeds}
+                  disabled={feedSyncing}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${feedSyncing ? "animate-spin" : ""}`} />
+                  {feedSyncing ? "Syncing..." : "Sync Feeds Now"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 4: Interactive MITRE ATT&CK Matrix Navigator */}
+      {mitreModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full p-6 relative shadow-2xl">
+            <button
+              onClick={() => setMitreModalOpen(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                <Database className="w-6 h-6 text-purple-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">MITRE ATT&CK Enterprise Matrix</h3>
+                <p className="text-xs text-slate-400">Tactics, Techniques and Procedures (TTPs) mapped from live telemetry</p>
+              </div>
+            </div>
+
+            {mitreLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center text-slate-400">
+                <div className="w-6 h-6 border-2 border-purple-400 border-t-transparent rounded-full animate-spin mb-2" />
+                <span>Aggregating MITRE ATT&CK Matrix telemetry...</span>
+              </div>
+            ) : mitreData ? (
+              <div className="space-y-4">
+                {/* Tactic summary badges */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-500 font-mono block">ACTIVE TECHNIQUES</span>
+                    <span className="text-lg font-bold text-purple-400 font-mono">{mitreData.total_active_techniques} Active</span>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-500 font-mono block">TOTAL DETECTIONS</span>
+                    <span className="text-lg font-bold text-sky-400 font-mono">{mitreData.total_detections} Hits</span>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-500 font-mono block">PRIMARY TACTIC</span>
+                    <span className="text-xs font-bold text-red-400 block truncate mt-1">Command & Control</span>
+                  </div>
+                  <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-500 font-mono block">ENTERPRISE COVERAGE</span>
+                    <span className="text-xs font-bold text-emerald-400 block truncate mt-1">8 Core Techniques</span>
+                  </div>
+                </div>
+
+                {/* Techniques List */}
+                <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+                  {mitreData.techniques?.map((tech) => (
+                    <div
+                      key={tech.id}
+                      className={`p-3 rounded-xl border transition ${
+                        tech.active
+                          ? "bg-slate-950 border-purple-500/40 shadow-sm"
+                          : "bg-slate-950/40 border-slate-800 opacity-60"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-0.5 rounded text-xs font-mono font-bold ${
+                            tech.active ? "bg-purple-500/20 text-purple-300" : "bg-slate-800 text-slate-400"
+                          }`}>
+                            {tech.id}
+                          </span>
+                          <span className="text-sm font-semibold text-white">{tech.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] px-2 py-0.5 rounded font-mono ${
+                            tech.severity === "CRITICAL"
+                              ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                              : "bg-amber-500/20 text-amber-400"
+                          }`}>
+                            {tech.severity}
+                          </span>
+                          <a
+                            href={tech.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-slate-400 hover:text-white"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-400">{tech.description}</p>
+                      <div className="flex items-center gap-3 mt-2 text-[11px] font-mono text-slate-500">
+                        <span>Tactic: <strong className="text-slate-300">{tech.tactic}</strong></span>
+                        <span>Telemetry Hits: <strong className={tech.hits > 0 ? "text-purple-400" : "text-slate-400"}>{tech.hits}</strong></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* Modal 5: Autonomous AI Threat Analyst Copilot */}
+      {aiModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full p-6 relative shadow-2xl">
+            <button
+              onClick={() => setAiModalOpen(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-2 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                <Bot className="w-6 h-6 text-purple-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Autonomous AI Threat Analyst Copilot</h3>
+                <p className="text-xs text-slate-400">Heuristic reasoning, adversary attribution & automated SOC playbook</p>
+              </div>
+            </div>
+
+            {aiLoading ? (
+              <div className="py-12 flex flex-col items-center justify-center text-slate-400">
+                <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin mb-3" />
+                <span className="font-mono text-xs">Analyzing beacon pulses, Shannon entropy & telemetry graph...</span>
+              </div>
+            ) : aiInvestigation ? (
+              <div className="space-y-3">
+                {/* Threat attribution hypothesis */}
+                <div className="bg-slate-950 p-3 rounded-xl border border-purple-500/30 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-mono block">Attribution Hypothesis</span>
+                    <span className="text-sm font-bold text-white">{aiInvestigation.attribution_hypothesis}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className={`text-xs px-2.5 py-1 rounded font-mono font-bold ${
+                      aiInvestigation.urgency === "IMMEDIATE_ACTION_REQUIRED"
+                        ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                        : "bg-amber-500/20 text-amber-400"
+                    }`}>
+                      {aiInvestigation.urgency}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block mt-0.5 font-mono">
+                      Confidence: {aiInvestigation.attribution_confidence}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Executive summary narrative */}
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 text-xs text-slate-300 leading-relaxed font-sans">
+                  <span className="text-[10px] text-slate-400 uppercase font-mono block font-bold mb-1">Investigation Synthesis:</span>
+                  {aiInvestigation.executive_summary}
+                </div>
+
+                {/* Kill chain stage */}
+                <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 flex items-center justify-between text-xs">
+                  <span className="text-slate-400 font-mono">CYBER KILL CHAIN STAGE:</span>
+                  <span className="text-amber-400 font-bold font-mono">{aiInvestigation.kill_chain_stage}</span>
+                </div>
+
+                {/* Recommended Containment Playbook */}
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
+                  <span className="text-[10px] text-slate-400 uppercase font-mono block font-bold mb-2">Recommended SOC Actions:</span>
+                  <ul className="space-y-1.5 text-xs text-slate-300">
+                    {aiInvestigation.recommended_actions?.map((act, idx) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                        <span>{act}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => {
+                      handleMitigate(selectedFlow);
+                      setAiModalOpen(false);
+                    }}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <Lock className="w-3.5 h-3.5" /> Execute Recommended Containment
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       )}
